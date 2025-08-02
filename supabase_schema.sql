@@ -61,19 +61,6 @@ CREATE TABLE public.sale_items (
   discount_amount DECIMAL(10,2) DEFAULT 0
 );
 
--- Create shifts table
-CREATE TABLE public.shifts (
-  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-  user_id UUID REFERENCES public.users(id) NOT NULL,
-  start_time TIMESTAMP WITH TIME ZONE NOT NULL,
-  end_time TIMESTAMP WITH TIME ZONE,
-  break_duration INTEGER DEFAULT 0, -- in minutes
-  total_sales DECIMAL(10,2) DEFAULT 0,
-  notes TEXT,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  status TEXT DEFAULT 'active' CHECK (status IN ('active', 'completed', 'cancelled'))
-);
-
 -- Create inventory_movements table
 CREATE TABLE public.inventory_movements (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
@@ -92,7 +79,6 @@ CREATE INDEX idx_products_category ON public.products(category);
 CREATE INDEX idx_products_active ON public.products(is_active);
 CREATE INDEX idx_sales_date ON public.sales(sale_date);
 CREATE INDEX idx_sales_created_by ON public.sales(created_by);
-CREATE INDEX idx_shifts_user_date ON public.shifts(user_id, start_time);
 CREATE INDEX idx_inventory_movements_product ON public.inventory_movements(product_id, created_at);
 
 -- Create updated_at trigger function
@@ -138,7 +124,6 @@ ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.products ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.sales ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.sale_items ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.shifts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.inventory_movements ENABLE ROW LEVEL SECURITY;
 
 -- Create RLS policies
@@ -198,27 +183,53 @@ CREATE POLICY "Admins can view all sale items" ON public.sale_items
     )
   );
 
--- Shifts policies
-CREATE POLICY "Users can view own shifts" ON public.shifts
-  FOR SELECT USING (user_id = auth.uid());
-
-CREATE POLICY "Admins can view all shifts" ON public.shifts
-  FOR SELECT USING (
-    EXISTS (
-      SELECT 1 FROM public.users
-      WHERE id = auth.uid() AND role = 'admin'
-    )
-  );
-
-CREATE POLICY "Users can manage own shifts" ON public.shifts
-  FOR ALL USING (user_id = auth.uid());
-
 -- Inventory movements - all authenticated users can view, only authenticated can create
 CREATE POLICY "Anyone can view inventory movements" ON public.inventory_movements
   FOR SELECT USING (auth.role() = 'authenticated');
 
 CREATE POLICY "Authenticated users can create inventory movements" ON public.inventory_movements
   FOR INSERT WITH CHECK (created_by = auth.uid());
+
+-- Create wallet_balances table for tracking daily wallet balance management
+CREATE TABLE public.wallet_balances (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
+    date DATE NOT NULL,
+    opening_balance DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+    closing_balance DECIMAL(10,2),
+    status VARCHAR(20) NOT NULL DEFAULT 'opened' CHECK (status IN ('opened', 'closed')),
+    notes TEXT,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Create indexes for wallet_balances
+CREATE INDEX idx_wallet_balances_user_date ON public.wallet_balances(user_id, date);
+CREATE INDEX idx_wallet_balances_date ON public.wallet_balances(date);
+CREATE INDEX idx_wallet_balances_user ON public.wallet_balances(user_id);
+CREATE INDEX idx_wallet_balances_status ON public.wallet_balances(status);
+
+-- Enable Row Level Security for wallet_balances
+ALTER TABLE public.wallet_balances ENABLE ROW LEVEL SECURITY;
+
+-- Create policies for wallet_balances table
+CREATE POLICY "Users can view their own wallet balances" ON public.wallet_balances
+    FOR SELECT USING (user_id = auth.uid());
+
+CREATE POLICY "Users can create their own wallet balances" ON public.wallet_balances
+    FOR INSERT WITH CHECK (user_id = auth.uid());
+
+CREATE POLICY "Users can update their own wallet balances" ON public.wallet_balances
+    FOR UPDATE USING (user_id = auth.uid());
+
+-- Admins can view all wallet balances
+CREATE POLICY "Admins can view all wallet balances" ON public.wallet_balances
+    FOR SELECT USING (
+        EXISTS (
+            SELECT 1 FROM public.users
+            WHERE id = auth.uid() AND role = 'admin'
+        )
+    );
 
 -- Insert sample data
 -- Note: To create admin users, first sign up normally, then update their role manually

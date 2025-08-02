@@ -3,7 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../auth/login_page.dart';
 import '../inventory/inventory_page.dart';
 import '../sales/sales_page.dart';
-import '../shifts/shifts_page.dart';
+import '../reports/reports_page.dart';
 import '../debug/database_test_page.dart';
 import '../debug/network_troubleshooting_page.dart';
 import '../../widgets/language/language_selector.dart';
@@ -24,7 +24,7 @@ class _HomePageState extends State<HomePage> {
     const DashboardTab(),
     const InventoryPage(),
     const SalesPage(),
-    const ShiftsPage(),
+    const ReportsPage(),
     const SettingsTab(),
   ];
 
@@ -70,8 +70,8 @@ class _HomePageState extends State<HomePage> {
             label: l10n.sales,
           ),
           BottomNavigationBarItem(
-            icon: const Icon(Icons.access_time),
-            label: l10n.shifts,
+            icon: const Icon(Icons.bar_chart),
+            label: l10n.reports,
           ),
           BottomNavigationBarItem(
             icon: const Icon(Icons.settings),

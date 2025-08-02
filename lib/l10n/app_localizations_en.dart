@@ -21,7 +21,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get sales => 'Sales';
 
   @override
-  String get shifts => 'Shifts';
+  String get reports => 'Reports';
 
   @override
   String get settings => 'Settings';

@@ -349,99 +349,20 @@ class _SalesPageState extends State<SalesPage> {
         
         final data = {
           'user_id': user.id,
-  Future<void> _testWalletBalanceTable() async {
-    try {
-      print('Debug: Testing wallet_balances table accessibility...');
-      final user = Supabase.instance.client.auth.currentUser;
-      if (user == null) {
-        print('Debug: No authenticated user');
-        return;
-      }
-      // Test if we can read from the table
-      final readTest = await Supabase.instance.client
-          .from(AppConstants.walletBalanceTable)
-          .select('*')
-          .limit(1);
-      print('Debug: Read test successful: $readTest');
-      // Test if user exists in users table
-      final userTest = await Supabase.instance.client
-          .from(AppConstants.usersTable)
-          .select('id, email, name, role')
-          .eq('id', user.id);
-      print('Debug: User in users table: $userTest');
-    } catch (e) {
-      print('Debug: Wallet balance table test failed: $e');
-    }
-  }
-
-  Future<void> _saveStartBalance(double balance) async {
-    // Run test first
-    await _testWalletBalanceTable();
-    try {
-      final user = Supabase.instance.client.auth.currentUser;
-      print('Debug: Current user: ${user?.id}');
-      print('Debug: User email: ${user?.email}');
-      print('Debug: Supabase enabled: ${AppConstants.enableSupabase}');
-      print('Debug: Wallet table name: ${AppConstants.walletBalanceTable}');
-      if (user != null && AppConstants.enableSupabase) {
-        // Ensure user exists in public.users
-        try {
-          final existingUserCheck = await Supabase.instance.client
-              .from(AppConstants.usersTable)
-              .select('id')
-              .eq('id', user.id);
-          print('Debug: Existing user check: $existingUserCheck');
-          if (existingUserCheck.isEmpty) {
-            print('Debug: Creating user in public.users table');
-            await Supabase.instance.client
-                .from(AppConstants.usersTable)
-                .insert({
-                  'id': user.id,
-                  'email': user.email ?? '',
-                  'name': user.email?.split('@')[0] ?? 'Staff Member',
-                  'role': 'staff',
-                });
-            print('Debug: User created successfully');
-          } else {
-            print('Debug: User already exists in public.users');
-          }
-        } catch (userError) {
-          print('Debug: Error checking/creating user: $userError');
-        }
-        final today = DateTime.now().toIso8601String().substring(0, 10);
-        print('Debug: Today date: $today');
-        // Check if there's already an open session for today
-        final existingSession = await Supabase.instance.client
-            .from(AppConstants.walletBalanceTable)
-            .select()
-            .eq('user_id', user.id)
-            .eq('date', today)
-            .eq('status', 'opened');
-        print('Debug: Existing sessions: $existingSession');
-        if (existingSession.isNotEmpty) {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('You already have an active session for today'),
-                backgroundColor: Colors.orange,
-              ),
-            );
-          }
-          return;
-        }
-        final data = {
-          'user_id': user.id,
           'opening_balance': balance,
           'closing_balance': null,
           'date': today,
           'status': 'opened',
         };
-        print('Debug: Inserting wallet balance data: $data');
+        print('Debug: Inserting data: $data');
+        
         final response = await Supabase.instance.client
             .from(AppConstants.walletBalanceTable)
             .insert(data)
             .select();
+            
         print('Debug: Insert response: $response');
+        
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
@@ -470,6 +391,74 @@ class _SalesPageState extends State<SalesPage> {
       }
     }
   }
+
+  Future<void> _saveEndBalance(double balance) async {
+    try {
+      final user = Supabase.instance.client.auth.currentUser;
+      print('Debug: Ending session for user: ${user?.id}');
+      
+      if (user != null && AppConstants.enableSupabase) {
+        final today = DateTime.now().toIso8601String().substring(0, 10);
+        print('Debug: Looking for open session on date: $today');
+        
+        // Get today's wallet balance record
+        final response = await Supabase.instance.client
+            .from(AppConstants.walletBalanceTable)
+            .select()
+            .eq('user_id', user.id)
+            .eq('date', today)
+            .eq('status', 'opened')
+            .order('created_at', ascending: false)
+            .limit(1);
+
+        print('Debug: Found open sessions: $response');
+
+        if (response.isNotEmpty) {
+          final record = response.first;
+          final openingBalance = record['opening_balance'] as double;
+          print('Debug: Opening balance: $openingBalance, Closing balance: $balance');
+          
+          // Update the record with closing balance and status
+          final updateResponse = await Supabase.instance.client
+              .from(AppConstants.walletBalanceTable)
+              .update({
+                'closing_balance': balance,
+                'status': 'closed',
+                'updated_at': DateTime.now().toIso8601String(),
+              })
+              .eq('id', record['id'])
+              .select();
+
+          print('Debug: Update response: $updateResponse');
+
+          // Check if balances tally
+          final difference = balance - openingBalance;
+          
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                  'Sale session ended. Balance difference: ₹${difference.toStringAsFixed(2)}'
+                ),
+                backgroundColor: difference >= 0 ? Colors.green : Colors.orange,
+              ),
+            );
+          }
+        } else {
+          print('Debug: No active session found');
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('No active sale session found for today'),
+                backgroundColor: Colors.orange,
+              ),
+            );
+          }
+        }
+      } else {
+        print('Debug: User is null or Supabase disabled');
+      }
+    } catch (e) {
       print('Debug: Error ending sale session: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

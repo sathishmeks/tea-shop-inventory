@@ -21,7 +21,7 @@ class AppLocalizationsTa extends AppLocalizations {
   String get sales => 'விற்பனை';
 
   @override
-  String get shifts => 'ஷிப்ட்';
+  String get reports => 'அறிக்கைகள்';
 
   @override
   String get settings => 'அமைப்புகள்';

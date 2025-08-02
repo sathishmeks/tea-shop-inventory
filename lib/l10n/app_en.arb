@@ -19,9 +19,9 @@
     "description": "Sales tab label"
   },
   
-  "shifts": "Shifts",
-  "@shifts": {
-    "description": "Shifts tab label"
+  "reports": "Reports",
+  "@reports": {
+    "description": "Reports tab label"
   },
   
   "settings": "Settings",

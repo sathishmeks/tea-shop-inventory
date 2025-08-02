@@ -22,16 +22,17 @@ class AppConstants {
   static const int productTypeId = 1;
   static const int saleTypeId = 2;
   static const int inventoryTypeId = 3;
-  static const int shiftTypeId = 4;
   static const int categoryTypeId = 5;
+  static const int walletBalanceTypeId = 6;
   
   // API Endpoints
   static const String usersTable = 'users';
   static const String productsTable = 'products';
   static const String salesTable = 'sales';
   static const String inventoryTable = 'inventory';
-  static const String shiftsTable = 'shifts';
   static const String categoriesTable = 'categories';
+  static const String reportsTable = 'reports';
+  static const String walletBalanceTable = 'wallet_balances';
   
   // Pagination
   static const int defaultPageSize = 20;

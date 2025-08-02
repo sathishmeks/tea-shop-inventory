@@ -122,11 +122,11 @@ abstract class AppLocalizations {
   /// **'Sales'**
   String get sales;
 
-  /// Shifts tab label
+  /// Reports tab label
   ///
   /// In en, this message translates to:
-  /// **'Shifts'**
-  String get shifts;
+  /// **'Reports'**
+  String get reports;
 
   /// Settings tab label
   ///
