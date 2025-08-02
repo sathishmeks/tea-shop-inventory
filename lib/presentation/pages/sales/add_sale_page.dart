@@ -103,16 +103,49 @@ class _AddSalePageState extends State<AddSalePage> {
   }
 
   void _addToCart(Product product) {
+    // Check if product has sufficient stock
+    if (product.stockQuantity <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('${product.name} is out of stock'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    // Check existing cart quantity
+    final existingIndex = _cartItems.indexWhere(
+      (item) => item.productId == product.id,
+    );
+    
+    double currentCartQuantity = 0;
+    if (existingIndex >= 0) {
+      currentCartQuantity = _cartItems[existingIndex].quantity;
+    }
+
     showDialog(
       context: context,
       builder: (context) => _AddToCartDialog(
         product: product,
+        existingCartQuantity: currentCartQuantity,
         onAdd: (quantity) {
-          setState(() {
-            final existingIndex = _cartItems.indexWhere(
-              (item) => item.productId == product.id,
+          // Check if adding this quantity would exceed available stock
+          if (currentCartQuantity + quantity > product.stockQuantity) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                  'Cannot add ${quantity.toStringAsFixed(1)} ${product.unit} of ${product.name}. '
+                  'Only ${(product.stockQuantity - currentCartQuantity).toStringAsFixed(1)} ${product.unit} available.'
+                ),
+                backgroundColor: Colors.red,
+                duration: const Duration(seconds: 3),
+              ),
             );
-            
+            return;
+          }
+
+          setState(() {
             if (existingIndex >= 0) {
               _cartItems[existingIndex] = _cartItems[existingIndex].copyWith(
                 quantity: _cartItems[existingIndex].quantity + quantity,
@@ -156,12 +189,50 @@ class _AddSalePageState extends State<AddSalePage> {
     return _subtotal - _discountAmount;
   }
 
+  void _updateLocalInventory() {
+    // Update local product list to reflect reduced inventory
+    for (final cartItem in _cartItems) {
+      final productIndex = _products.indexWhere((p) => p.id == cartItem.productId);
+      if (productIndex >= 0) {
+        final currentProduct = _products[productIndex];
+        final newStockQuantity = currentProduct.stockQuantity - cartItem.quantity;
+        
+        _products[productIndex] = currentProduct.copyWith(
+          stockQuantity: newStockQuantity,
+        );
+      }
+    }
+    
+    // Update the UI to reflect the new inventory levels
+    setState(() {});
+  }
+
   Future<void> _saveSale() async {
     if (!_formKey.currentState!.validate() || _cartItems.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Please add at least one item to the cart'),
           backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    // Validate stock levels before proceeding
+    List<String> stockErrors = [];
+    for (final cartItem in _cartItems) {
+      final product = _products.firstWhere((p) => p.id == cartItem.productId);
+      if (cartItem.quantity > product.stockQuantity) {
+        stockErrors.add('${product.name}: Only ${product.stockQuantity} ${product.unit} available');
+      }
+    }
+
+    if (stockErrors.isNotEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Insufficient stock:\n${stockErrors.join('\n')}'),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 4),
         ),
       );
       return;
@@ -221,17 +292,27 @@ class _AddSalePageState extends State<AddSalePage> {
                 .insert(saleItem.toJson())
                 .timeout(const Duration(seconds: 10));
 
-            // Update product stock
+            // Update product stock in database
             final product = _products.firstWhere(
               (p) => p.id == cartItem.productId,
             );
+            final newStockQuantity = product.stockQuantity - cartItem.quantity;
+            
             await Supabase.instance.client
                 .from('products')
                 .update({
-                  'stock_quantity': product.stockQuantity - cartItem.quantity,
+                  'stock_quantity': newStockQuantity,
                 })
                 .eq('id', cartItem.productId)
                 .timeout(const Duration(seconds: 10));
+
+            // Update local product list to reflect new stock
+            final productIndex = _products.indexWhere((p) => p.id == cartItem.productId);
+            if (productIndex >= 0) {
+              _products[productIndex] = _products[productIndex].copyWith(
+                stockQuantity: newStockQuantity,
+              );
+            }
           }
 
           // Online save successful
@@ -254,7 +335,9 @@ class _AddSalePageState extends State<AddSalePage> {
                                 errorMessage.contains('host lookup');
           
           if (isNetworkError) {
-            // Network error - save offline
+            // Network error - save offline and update local inventory
+            _updateLocalInventory();
+            
             if (mounted) {
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(
@@ -264,7 +347,9 @@ class _AddSalePageState extends State<AddSalePage> {
               );
             }
           } else {
-            // Some other error - show it normally
+            // Some other error - still update local inventory since sale items were processed
+            _updateLocalInventory();
+            
             if (mounted) {
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(
@@ -276,7 +361,9 @@ class _AddSalePageState extends State<AddSalePage> {
           }
         }
       } else {
-        // Offline mode - just show success
+        // Offline mode - update local inventory and show success
+        _updateLocalInventory();
+        
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
@@ -609,10 +696,12 @@ class SaleItemCart {
 class _AddToCartDialog extends StatefulWidget {
   final Product product;
   final Function(double) onAdd;
+  final double? existingCartQuantity;
 
   const _AddToCartDialog({
     required this.product,
     required this.onAdd,
+    this.existingCartQuantity,
   });
 
   @override
@@ -622,6 +711,11 @@ class _AddToCartDialog extends StatefulWidget {
 class _AddToCartDialogState extends State<_AddToCartDialog> {
   double _quantity = 1;
 
+  double get availableQuantity {
+    final existingInCart = widget.existingCartQuantity ?? 0;
+    return widget.product.stockQuantity.toDouble() - existingInCart;
+  }
+
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
@@ -630,7 +724,10 @@ class _AddToCartDialogState extends State<_AddToCartDialog> {
         mainAxisSize: MainAxisSize.min,
         children: [
           Text('Price: ₹${widget.product.price.toStringAsFixed(2)}'),
-          Text('Available: ${widget.product.stockQuantity}'),
+          Text('Stock: ${widget.product.stockQuantity} ${widget.product.unit}'),
+          if (widget.existingCartQuantity != null && widget.existingCartQuantity! > 0)
+            Text('In cart: ${widget.existingCartQuantity!.toStringAsFixed(1)} ${widget.product.unit}'),
+          Text('Available: ${availableQuantity.toStringAsFixed(1)} ${widget.product.unit}'),
           const SizedBox(height: 16),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -646,7 +743,7 @@ class _AddToCartDialogState extends State<_AddToCartDialog> {
                   ),
                   Text(_quantity.toStringAsFixed(0)),
                   IconButton(
-                    onPressed: _quantity < widget.product.stockQuantity
+                    onPressed: _quantity < availableQuantity
                         ? () => setState(() => _quantity++)
                         : null,
                     icon: const Icon(Icons.add),
