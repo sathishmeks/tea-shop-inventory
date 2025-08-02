@@ -45,7 +45,7 @@ class _SalesHistoryPageState extends State<SalesHistoryPage> {
 
     try {
       final response = await Supabase.instance.client
-          .from('sales_history')
+          .from(AppConstants.salesHistoryTable)
           .select()
           .eq('sale_id', widget.saleId)
           .order('changed_at', ascending: false);

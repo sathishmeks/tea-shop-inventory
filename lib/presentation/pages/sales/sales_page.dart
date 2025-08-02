@@ -1,11 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:uuid/uuid.dart';
 import '../../../core/themes/app_theme.dart';
 import '../../../core/constants/app_constants.dart';
 import '../../../domain/entities/sale.dart';
+import '../../../domain/entities/sales_history.dart';
 import '../../widgets/loading_widget.dart';
 import 'add_sale_page.dart';
+import 'edit_sale_page.dart';
+import 'sales_history_page.dart';
 
 class SalesPage extends StatefulWidget {
   const SalesPage({super.key});
@@ -636,6 +640,302 @@ class _SalesPageState extends State<SalesPage> {
     }
   }
 
+  void _showSaleActionsDialog(Sale sale) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Sale ${sale.saleNumber}'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Customer: ${sale.customerName ?? 'Walk-in'}'),
+            Text('Amount: ₹${sale.totalAmount.toStringAsFixed(2)}'),
+            Text('Status: ${sale.status.toUpperCase()}'),
+            Text('Date: ${_formatDate(sale.saleDate)} at ${_formatTime(sale.saleDate)}'),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => SalesHistoryPage(saleId: sale.id),
+                ),
+              );
+            },
+            child: const Text('View History'),
+          ),
+          if (sale.status == 'completed') ...[
+            TextButton(
+              onPressed: () {
+                Navigator.pop(context);
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => EditSalePage(sale: sale),
+                  ),
+                ).then((_) => _loadSales());
+              },
+              child: const Text('Edit Sale'),
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.pop(context);
+                _showCancelSaleDialog(sale);
+              },
+              child: const Text('Cancel Sale'),
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.pop(context);
+                _showRefundSaleDialog(sale);
+              },
+              child: const Text('Refund Sale'),
+            ),
+          ],
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showCancelSaleDialog(Sale sale) {
+    final reasonController = TextEditingController();
+    
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Cancel Sale ${sale.saleNumber}'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('Are you sure you want to cancel this sale?'),
+            const SizedBox(height: 16),
+            TextField(
+              controller: reasonController,
+              decoration: const InputDecoration(
+                labelText: 'Reason for cancellation',
+                hintText: 'Enter reason...',
+              ),
+              maxLines: 3,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              reasonController.dispose();
+            },
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              if (reasonController.text.trim().isEmpty) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Please provide a reason for cancellation'),
+                    backgroundColor: Colors.red,
+                  ),
+                );
+                return;
+              }
+              Navigator.pop(context);
+              _cancelSale(sale, reasonController.text.trim());
+              reasonController.dispose();
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.errorColor),
+            child: const Text('Cancel Sale'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showRefundSaleDialog(Sale sale) {
+    final reasonController = TextEditingController();
+    
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Refund Sale ${sale.saleNumber}'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('Are you sure you want to refund this sale?'),
+            const SizedBox(height: 8),
+            Text('Amount: ₹${sale.totalAmount.toStringAsFixed(2)}'),
+            const SizedBox(height: 16),
+            TextField(
+              controller: reasonController,
+              decoration: const InputDecoration(
+                labelText: 'Reason for refund',
+                hintText: 'Enter reason...',
+              ),
+              maxLines: 3,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              reasonController.dispose();
+            },
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              if (reasonController.text.trim().isEmpty) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Please provide a reason for refund'),
+                    backgroundColor: Colors.red,
+                  ),
+                );
+                return;
+              }
+              Navigator.pop(context);
+              _refundSale(sale, reasonController.text.trim());
+              reasonController.dispose();
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
+            child: const Text('Refund Sale'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _cancelSale(Sale sale, String reason) async {
+    try {
+      final uuid = const Uuid();
+      final now = DateTime.now();
+      final currentUser = Supabase.instance.client.auth.currentUser;
+
+      if (AppConstants.enableSupabase && currentUser != null) {
+        // Update sale status
+        await Supabase.instance.client
+            .from(AppConstants.salesTable)
+            .update({
+              'status': 'cancelled',
+            })
+            .eq('id', sale.id);
+
+        // Create sales history record
+        final historyRecord = SalesHistory(
+          id: uuid.v4(),
+          saleId: sale.id,
+          changeType: SalesChangeType.cancelled,
+          fieldChanged: 'status',
+          oldValue: {'status': sale.status},
+          newValue: {'status': 'cancelled'},
+          reason: reason,
+          changedBy: currentUser.id,
+          changedAt: now,
+          metadata: {
+            'original_amount': sale.totalAmount,
+            'payment_method': sale.paymentMethod,
+          },
+        );
+
+        await Supabase.instance.client
+            .from(AppConstants.salesHistoryTable)
+            .insert(historyRecord.toJson());
+
+        // Restore inventory (add back the sold items)
+        // Note: This would require getting sale items and updating product stock
+        // For now, we'll just update the sale status
+        
+        _loadSales(); // Refresh the sales list
+        
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Sale ${sale.saleNumber} cancelled successfully'),
+              backgroundColor: AppTheme.warningColor,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error cancelling sale: $e'),
+            backgroundColor: AppTheme.errorColor,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _refundSale(Sale sale, String reason) async {
+    try {
+      final uuid = const Uuid();
+      final now = DateTime.now();
+      final currentUser = Supabase.instance.client.auth.currentUser;
+
+      if (AppConstants.enableSupabase && currentUser != null) {
+        // Update sale status
+        await Supabase.instance.client
+            .from(AppConstants.salesTable)
+            .update({
+              'status': 'refunded',
+            })
+            .eq('id', sale.id);
+
+        // Create sales history record
+        final historyRecord = SalesHistory(
+          id: uuid.v4(),
+          saleId: sale.id,
+          changeType: SalesChangeType.refunded,
+          fieldChanged: 'status',
+          oldValue: {'status': sale.status},
+          newValue: {'status': 'refunded'},
+          reason: reason,
+          changedBy: currentUser.id,
+          changedAt: now,
+          metadata: {
+            'refund_amount': sale.totalAmount,
+            'original_payment_method': sale.paymentMethod,
+          },
+        );
+
+        await Supabase.instance.client
+            .from(AppConstants.salesHistoryTable)
+            .insert(historyRecord.toJson());
+
+        // Restore inventory (add back the sold items)
+        // Note: This would require getting sale items and updating product stock
+        
+        _loadSales(); // Refresh the sales list
+        
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Sale ${sale.saleNumber} refunded successfully'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error refunding sale: $e'),
+            backgroundColor: AppTheme.errorColor,
+          ),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -874,9 +1174,7 @@ class _SalesPageState extends State<SalesPage> {
                                       ),
                                   ],
                                 ),
-                                onTap: () {
-                                  // TODO: Navigate to sale details
-                                },
+                                onTap: () => _showSaleActionsDialog(sale),
                               ),
                             );
                           },

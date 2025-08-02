@@ -225,14 +225,20 @@ class _EditSalePageState extends State<EditSalePage> {
         status: _status,
         notes: _notesController.text.isEmpty ? null : _notesController.text,
         totalAmount: _itemsModified ? _calculatedTotal : oldSale.totalAmount,
-        updatedAt: now,
       );
 
       if (AppConstants.enableSupabase) {
-        // Update the sale
+        // Update the sale - only send fields that should be updated
         await Supabase.instance.client
             .from('sales')
-            .update(updatedSale.toJson())
+            .update({
+              'customer_name': updatedSale.customerName,
+              'customer_phone': updatedSale.customerPhone,
+              'payment_method': updatedSale.paymentMethod,
+              'status': updatedSale.status,
+              'notes': updatedSale.notes,
+              'total_amount': updatedSale.totalAmount,
+            })
             .eq('id', widget.sale.id);
 
         // Update sale items if modified
@@ -249,11 +255,12 @@ class _EditSalePageState extends State<EditSalePage> {
         }
 
         // Create audit history record
+        final changedFields = _getChangedFieldsDescription(oldSale, updatedSale);
         final historyRecord = SalesHistory(
           id: uuid.v4(),
           saleId: widget.sale.id,
           changeType: SalesChangeType.updated,
-          fieldChanged: _itemsModified ? 'sale_details_and_items' : 'sale_details',
+          fieldChanged: changedFields,
           oldValue: {
             'customer_name': oldSale.customerName,
             'customer_phone': oldSale.customerPhone,
@@ -261,8 +268,6 @@ class _EditSalePageState extends State<EditSalePage> {
             'status': oldSale.status,
             'notes': oldSale.notes,
             'total_amount': oldSale.totalAmount,
-            if (_itemsModified) 'items_modified': false,
-            if (_itemsModified) 'original_total': oldSale.totalAmount,
           },
           newValue: {
             'customer_name': updatedSale.customerName,
@@ -271,8 +276,6 @@ class _EditSalePageState extends State<EditSalePage> {
             'status': updatedSale.status,
             'notes': updatedSale.notes,
             'total_amount': updatedSale.totalAmount,
-            if (_itemsModified) 'items_modified': true,
-            if (_itemsModified) 'new_calculated_total': _calculatedTotal,
           },
           reason: _reasonController.text,
           changedBy: Supabase.instance.client.auth.currentUser?.id ?? 'unknown',
@@ -286,7 +289,7 @@ class _EditSalePageState extends State<EditSalePage> {
         // Try to save history record
         try {
           await Supabase.instance.client
-              .from('sales_history')
+              .from(AppConstants.salesHistoryTable)
               .insert(historyRecord.toJson());
         } catch (historyError) {
           print('Warning: Could not save sales history: $historyError');
@@ -314,6 +317,34 @@ class _EditSalePageState extends State<EditSalePage> {
     }
 
     setState(() => _isLoading = false);
+  }
+
+  String _getChangedFieldsDescription(Sale oldSale, Sale newSale) {
+    List<String> changedFields = [];
+    
+    if (oldSale.customerName != newSale.customerName) {
+      changedFields.add('customer_name');
+    }
+    if (oldSale.customerPhone != newSale.customerPhone) {
+      changedFields.add('customer_phone');
+    }
+    if (oldSale.paymentMethod != newSale.paymentMethod) {
+      changedFields.add('payment_method');
+    }
+    if (oldSale.status != newSale.status) {
+      changedFields.add('status');
+    }
+    if (oldSale.notes != newSale.notes) {
+      changedFields.add('notes');
+    }
+    if (oldSale.totalAmount != newSale.totalAmount) {
+      changedFields.add('total_amount');
+    }
+    if (_itemsModified) {
+      changedFields.add('sale_items');
+    }
+    
+    return changedFields.join(', ');
   }
 
   @override

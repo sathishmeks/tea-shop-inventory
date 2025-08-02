@@ -34,6 +34,7 @@ class AppConstants {
   static const String reportsTable = 'reports';
   static const String walletBalanceTable = 'wallet_balances';
   static const String inventoryMovementsTable = 'inventory_movements';
+  static const String salesHistoryTable = 'sales_history';
   
   // Pagination
   static const int defaultPageSize = 20;

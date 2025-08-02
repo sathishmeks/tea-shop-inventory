@@ -5,6 +5,7 @@ import '../../../core/themes/app_theme.dart';
 import '../../../core/constants/app_constants.dart';
 import '../../../domain/entities/product.dart';
 import '../../../domain/entities/sale.dart';
+import '../../../domain/entities/sales_history.dart';
 import '../../widgets/loading_widget.dart';
 
 class AddSalePage extends StatefulWidget {
@@ -312,6 +313,45 @@ class _AddSalePageState extends State<AddSalePage> {
                 stockQuantity: newStockQuantity,
               );
             }
+          }
+
+          // Create initial sales history record for the creation
+          try {
+            final historyRecord = SalesHistory(
+              id: uuid.v4(),
+              saleId: saleId,
+              changeType: SalesChangeType.created,
+              newValue: {
+                'sale_number': saleNumber,
+                'customer_name': sale.customerName,
+                'customer_phone': sale.customerPhone,
+                'total_amount': sale.totalAmount,
+                'payment_method': sale.paymentMethod,
+                'status': sale.status,
+                'items_count': _cartItems.length,
+                'total_quantity': _cartItems.fold<double>(0, (sum, item) => sum + item.quantity),
+              },
+              reason: 'Initial sale creation',
+              changedBy: sale.createdBy,
+              changedAt: now,
+              metadata: {
+                'created_online': true,
+                'items': _cartItems.map((item) => {
+                  'product_id': item.productId,
+                  'product_name': item.productName,
+                  'quantity': item.quantity,
+                  'unit_price': item.unitPrice,
+                  'total_price': item.totalPrice,
+                }).toList(),
+              },
+            );
+
+            await Supabase.instance.client
+                .from(AppConstants.salesHistoryTable)
+                .insert(historyRecord.toJson())
+                .timeout(const Duration(seconds: 5));
+          } catch (historyError) {
+            print('Warning: Could not save initial sales history: $historyError');
           }
 
           // Online save successful
