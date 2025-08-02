@@ -5,6 +5,7 @@ import '../../../core/constants/app_constants.dart';
 import '../../../domain/entities/product.dart';
 import '../../widgets/loading_widget.dart';
 import 'add_product_page.dart';
+import 'product_refill_page.dart';
 
 class InventoryPage extends StatefulWidget {
   const InventoryPage({super.key});
@@ -186,6 +187,17 @@ class _InventoryPageState extends State<InventoryPage> {
         backgroundColor: AppTheme.primaryColor,
         foregroundColor: Colors.white,
         actions: [
+          IconButton(
+            icon: const Icon(Icons.add_box),
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => const ProductRefillPage(),
+                ),
+              ).then((_) => _loadProducts());
+            },
+            tooltip: 'Refill Products',
+          ),
           IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: _loadProducts,

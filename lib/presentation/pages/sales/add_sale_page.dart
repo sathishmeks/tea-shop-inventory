@@ -24,7 +24,6 @@ class _AddSalePageState extends State<AddSalePage> {
   List<SaleItemCart> _cartItems = [];
   bool _isLoading = false;
   String _paymentMethod = 'cash';
-  double _discountAmount = 0.0;
   
   @override
   void initState() {
@@ -186,7 +185,7 @@ class _AddSalePageState extends State<AddSalePage> {
   }
 
   double get _total {
-    return _subtotal - _discountAmount;
+    return _subtotal;
   }
 
   void _updateLocalInventory() {
@@ -256,7 +255,7 @@ class _AddSalePageState extends State<AddSalePage> {
             ? null 
             : _customerPhoneController.text,
         totalAmount: _total,
-        discountAmount: _discountAmount,
+        discountAmount: 0.0,
         paymentMethod: _paymentMethod,
         saleDate: now,
         createdBy: Supabase.instance.client.auth.currentUser?.id ?? 'unknown', 
@@ -586,20 +585,6 @@ class _AddSalePageState extends State<AddSalePage> {
                                 ),
                                 const SizedBox(height: 16),
                                 TextFormField(
-                                  decoration: const InputDecoration(
-                                    labelText: 'Discount Amount',
-                                    border: OutlineInputBorder(),
-                                    prefixText: '₹',
-                                  ),
-                                  keyboardType: TextInputType.number,
-                                  onChanged: (value) {
-                                    setState(() {
-                                      _discountAmount = double.tryParse(value) ?? 0.0;
-                                    });
-                                  },
-                                ),
-                                const SizedBox(height: 16),
-                                TextFormField(
                                   controller: _notesController,
                                   decoration: const InputDecoration(
                                     labelText: 'Notes (Optional)',
@@ -616,16 +601,6 @@ class _AddSalePageState extends State<AddSalePage> {
                                     Text('₹${_subtotal.toStringAsFixed(2)}'),
                                   ],
                                 ),
-                                if (_discountAmount > 0) ...[
-                                  const SizedBox(height: 8),
-                                  Row(
-                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                    children: [
-                                      const Text('Discount:'),
-                                      Text('-₹${_discountAmount.toStringAsFixed(2)}'),
-                                    ],
-                                  ),
-                                ],
                                 const SizedBox(height: 8),
                                 Row(
                                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
