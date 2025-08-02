@@ -21,6 +21,7 @@ cp build/app/outputs/flutter-apk/app-x86_64-release.apk "$DIST_DIR/TeaShop-x86_6
 echo "📄 Copying documentation..."
 cp BUILD_INFO.md "$DIST_DIR/"
 cp SALES_MANAGEMENT_GUIDE.md "$DIST_DIR/"
+cp NOTIFICATION_GUIDE.md "$DIST_DIR/"
 cp README.md "$DIST_DIR/" 2>/dev/null || echo "README.md not found, skipping..."
 
 # Create installation instructions
@@ -48,14 +49,17 @@ SYSTEM REQUIREMENTS:
 
 FEATURES:
 ✅ Complete inventory management
-✅ Sales tracking and editing
+✅ Sales tracking and editing  
 ✅ User management (admin/staff)
 ✅ Offline support
 ✅ Cloud synchronization
 ✅ Audit trail compliance
 ✅ PDF/CSV reports
+✅ Low stock notifications (NEW!)
+✅ Mobile push alerts (NEW!)
+✅ Smart inventory monitoring (NEW!)
 
-For detailed information, see BUILD_INFO.md and SALES_MANAGEMENT_GUIDE.md
+For detailed information, see BUILD_INFO.md, SALES_MANAGEMENT_GUIDE.md, and NOTIFICATION_GUIDE.md
 
 EOF
 

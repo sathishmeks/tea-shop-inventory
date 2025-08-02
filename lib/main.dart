@@ -10,6 +10,8 @@ import 'core/constants/app_constants.dart';
 import 'core/themes/app_theme.dart';
 import 'core/network/network_info.dart';
 import 'core/services/language_service.dart';
+import 'core/services/notification_service.dart';
+import 'core/services/stock_monitoring_service.dart';
 import 'presentation/pages/splash_page.dart';
 import 'l10n/app_localizations.dart';
 
@@ -22,14 +24,34 @@ void main() async {
   // Initialize Language Service
   await LanguageService.init();
   
+  // Initialize Notification Service
+  await NotificationService.init();
+  
+  // Request notification permissions
+  await NotificationService.requestPermissions();
+  
   // Initialize Supabase only if enabled
   if (AppConstants.enableSupabase && 
       AppConstants.supabaseUrl.isNotEmpty && 
       AppConstants.supabaseAnonKey.isNotEmpty) {
-    await Supabase.initialize(
-      url: AppConstants.supabaseUrl,
-      anonKey: AppConstants.supabaseAnonKey,
-    );
+    try {
+      await Supabase.initialize(
+        url: AppConstants.supabaseUrl,
+        anonKey: AppConstants.supabaseAnonKey,
+      );
+      print('Supabase initialized successfully');
+      
+      // Start stock monitoring service after successful Supabase initialization
+      final stockMonitoringService = StockMonitoringService();
+      await stockMonitoringService.startMonitoring();
+    } catch (e) {
+      print('Failed to initialize Supabase: $e');
+      // App will continue to work in offline mode
+      
+      // Still start stock monitoring for offline mode
+      final stockMonitoringService = StockMonitoringService();
+      await stockMonitoringService.startMonitoring();
+    }
   }
   
   runApp(const TeaShopApp());

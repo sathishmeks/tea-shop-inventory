@@ -6,6 +6,7 @@ import '../sales/sales_page.dart';
 import '../reports/reports_page.dart';
 import '../debug/database_test_page.dart';
 import '../debug/network_troubleshooting_page.dart';
+import '../settings/stock_notification_settings_page.dart';
 import '../../widgets/language/language_selector.dart';
 import '../../widgets/network_status_banner.dart';
 import '../../../l10n/app_localizations.dart';
@@ -763,12 +764,28 @@ class _DashboardTabState extends State<DashboardTab> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text(
-          'Alerts & Notifications',
-          style: TextStyle(
-            fontSize: 18,
-            fontWeight: FontWeight.bold,
-          ),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            const Text(
+              'Alerts & Notifications',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            TextButton.icon(
+              onPressed: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (context) => const StockNotificationSettingsPage(),
+                  ),
+                );
+              },
+              icon: const Icon(Icons.settings, size: 16),
+              label: const Text('Settings'),
+            ),
+          ],
         ),
         const SizedBox(height: 12),
         ...alerts,

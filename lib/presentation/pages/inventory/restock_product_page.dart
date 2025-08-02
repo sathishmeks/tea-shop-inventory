@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/themes/app_theme.dart';
 import '../../../core/constants/app_constants.dart';
+import '../../../core/services/stock_monitoring_service.dart';
 import '../../../domain/entities/product.dart';
 import '../../../domain/entities/stock_audit.dart';
 import '../../widgets/loading_widget.dart';
@@ -119,6 +120,14 @@ class _RestockProductPageState extends State<RestockProductPage> {
             duration: const Duration(seconds: 4),
           ),
         );
+        
+        // Notify stock monitoring service about the update
+        await StockMonitoringService().onStockUpdated(
+          widget.product.id,
+          newStockQuantity,
+          widget.product.minimumStock,
+        );
+        
         Navigator.of(context).pop(true); // Return true to indicate success
       }
     } catch (e) {

@@ -1,0 +1,35 @@
+Tea Shop Inventory - Installation Guide
+======================================
+
+QUICK START:
+1. Download TeaShop-Universal-v1.0.0.apk (recommended for most users)
+2. Transfer to your Android device
+3. Enable "Install from Unknown Sources" in Settings
+4. Tap the APK file to install
+
+APK OPTIONS:
+- TeaShop-Universal-v1.0.0.apk (25.7MB) - Works on all devices
+- TeaShop-ARM64-v1.0.0.apk (9.4MB) - Modern phones (2019+)
+- TeaShop-ARM32-v1.0.0.apk (9.1MB) - Older phones
+- TeaShop-x86_64-v1.0.0.apk (9.6MB) - Emulators
+
+SYSTEM REQUIREMENTS:
+- Android 5.0 or higher
+- 2GB RAM (recommended)
+- 50MB storage space
+- Internet connection for cloud sync
+
+FEATURES:
+✅ Complete inventory management
+✅ Sales tracking and editing  
+✅ User management (admin/staff)
+✅ Offline support
+✅ Cloud synchronization
+✅ Audit trail compliance
+✅ PDF/CSV reports
+✅ Low stock notifications (NEW!)
+✅ Mobile push alerts (NEW!)
+✅ Smart inventory monitoring (NEW!)
+
+For detailed information, see BUILD_INFO.md, SALES_MANAGEMENT_GUIDE.md, and NOTIFICATION_GUIDE.md
+

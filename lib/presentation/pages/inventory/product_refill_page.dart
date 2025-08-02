@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:uuid/uuid.dart';
 import '../../../core/themes/app_theme.dart';
 import '../../../core/constants/app_constants.dart';
+import '../../../core/services/stock_monitoring_service.dart';
 import '../../../domain/entities/product.dart';
 import '../../../domain/entities/inventory_movement.dart';
 import '../../widgets/loading_widget.dart';
@@ -217,6 +218,14 @@ class _ProductRefillPageState extends State<ProductRefillPage> {
               ),
               backgroundColor: AppTheme.successColor,
             ),
+          );
+          
+          // Notify stock monitoring service about the update
+          final newStockQuantity = _selectedProduct!.stockQuantity + quantity.toInt();
+          await StockMonitoringService().onStockUpdated(
+            _selectedProduct!.id,
+            newStockQuantity,
+            _selectedProduct!.minimumStock,
           );
           
           // Navigate back to previous page (typically inventory page)
