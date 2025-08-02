@@ -1,0 +1,251 @@
+{
+  "appTitle": "Tea Shop Manager",
+  "@appTitle": {
+    "description": "The title of the application"
+  },
+  
+  "dashboard": "Dashboard",
+  "@dashboard": {
+    "description": "Dashboard tab label"
+  },
+  
+  "inventory": "Inventory",
+  "@inventory": {
+    "description": "Inventory tab label"
+  },
+  
+  "sales": "Sales",
+  "@sales": {
+    "description": "Sales tab label"
+  },
+  
+  "shifts": "Shifts",
+  "@shifts": {
+    "description": "Shifts tab label"
+  },
+  
+  "settings": "Settings",
+  "@settings": {
+    "description": "Settings tab label"
+  },
+  
+  "login": "Login",
+  "@login": {
+    "description": "Login button text"
+  },
+  
+  "logout": "Logout",
+  "@logout": {
+    "description": "Logout button text"
+  },
+  
+  "email": "Email",
+  "@email": {
+    "description": "Email input label"
+  },
+  
+  "password": "Password",
+  "@password": {
+    "description": "Password input label"
+  },
+  
+  "signIn": "Sign In",
+  "@signIn": {
+    "description": "Sign in button text"
+  },
+  
+  "signUp": "Sign Up",
+  "@signUp": {
+    "description": "Sign up button text"
+  },
+  
+  "dontHaveAccount": "Don't have an account?",
+  "@dontHaveAccount": {
+    "description": "Text for sign up prompt"
+  },
+  
+  "alreadyHaveAccount": "Already have an account?",
+  "@alreadyHaveAccount": {
+    "description": "Text for sign in prompt"
+  },
+  
+  "productName": "Product Name",
+  "@productName": {
+    "description": "Product name input label"
+  },
+  
+  "description": "Description",
+  "@description": {
+    "description": "Description input label"
+  },
+  
+  "category": "Category",
+  "@category": {
+    "description": "Category input label"
+  },
+  
+  "sellingPrice": "Selling Price",
+  "@sellingPrice": {
+    "description": "Selling price input label"
+  },
+  
+  "costPrice": "Cost Price",
+  "@costPrice": {
+    "description": "Cost price input label"
+  },
+  
+  "currentStock": "Current Stock",
+  "@currentStock": {
+    "description": "Current stock input label"
+  },
+  
+  "minimumStock": "Minimum Stock",
+  "@minimumStock": {
+    "description": "Minimum stock input label"
+  },
+  
+  "unit": "Unit",
+  "@unit": {
+    "description": "Unit input label"
+  },
+  
+  "supplier": "Supplier",
+  "@supplier": {
+    "description": "Supplier input label"
+  },
+  
+  "barcode": "Barcode",
+  "@barcode": {
+    "description": "Barcode input label"
+  },
+  
+  "addProduct": "Add Product",
+  "@addProduct": {
+    "description": "Add product button text"
+  },
+  
+  "editProduct": "Edit Product",
+  "@editProduct": {
+    "description": "Edit product button text"
+  },
+  
+  "updateProduct": "Update Product",
+  "@updateProduct": {
+    "description": "Update product button text"
+  },
+  
+  "save": "Save",
+  "@save": {
+    "description": "Save button text"
+  },
+  
+  "cancel": "Cancel",
+  "@cancel": {
+    "description": "Cancel button text"
+  },
+  
+  "delete": "Delete",
+  "@delete": {
+    "description": "Delete button text"
+  },
+  
+  "search": "Search",
+  "@search": {
+    "description": "Search input placeholder"
+  },
+  
+  "newSale": "New Sale",
+  "@newSale": {
+    "description": "New sale button text"
+  },
+  
+  "customerName": "Customer Name",
+  "@customerName": {
+    "description": "Customer name input label"
+  },
+  
+  "customerPhone": "Customer Phone",
+  "@customerPhone": {
+    "description": "Customer phone input label"
+  },
+  
+  "paymentMethod": "Payment Method",
+  "@paymentMethod": {
+    "description": "Payment method label"
+  },
+  
+  "cash": "Cash",
+  "@cash": {
+    "description": "Cash payment method"
+  },
+  
+  "card": "Card",
+  "@card": {
+    "description": "Card payment method"
+  },
+  
+  "upi": "UPI",
+  "@upi": {
+    "description": "UPI payment method"
+  },
+  
+  "total": "Total",
+  "@total": {
+    "description": "Total amount label"
+  },
+  
+  "subtotal": "Subtotal",
+  "@subtotal": {
+    "description": "Subtotal amount label"
+  },
+  
+  "discount": "Discount",
+  "@discount": {
+    "description": "Discount amount label"
+  },
+  
+  "startShift": "Start Shift",
+  "@startShift": {
+    "description": "Start shift button text"
+  },
+  
+  "endShift": "End Shift",
+  "@endShift": {
+    "description": "End shift button text"
+  },
+  
+  "activeShift": "Active Shift",
+  "@activeShift": {
+    "description": "Active shift label"
+  },
+  
+  "duration": "Duration",
+  "@duration": {
+    "description": "Duration label"
+  },
+  
+  "language": "Language",
+  "@language": {
+    "description": "Language setting label"
+  },
+  
+  "english": "English",
+  "@english": {
+    "description": "English language option"
+  },
+  
+  "tamil": "Tamil",
+  "@tamil": {
+    "description": "Tamil language option"
+  },
+  
+  "databaseTest": "Database Test",
+  "@databaseTest": {
+    "description": "Database test button text"
+  },
+  
+  "testDatabaseConnection": "Test database connection and diagnose issues",
+  "@testDatabaseConnection": {
+    "description": "Database test description"
+  }
+}
