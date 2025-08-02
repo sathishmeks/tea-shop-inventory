@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/themes/app_theme.dart';
 import '../../../core/constants/app_constants.dart';
@@ -134,6 +135,353 @@ class _SalesPageState extends State<SalesPage> {
     return '${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}';
   }
 
+  Future<void> _showStartSaleDialog() async {
+    final TextEditingController balanceController = TextEditingController();
+    
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Start Sale Session'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('Enter your starting wallet balance:'),
+            const SizedBox(height: 16),
+            TextField(
+              controller: balanceController,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              inputFormatters: [
+                FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,2}')),
+              ],
+              decoration: const InputDecoration(
+                labelText: 'Starting Balance (₹)',
+                border: OutlineInputBorder(),
+                prefixText: '₹ ',
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              if (balanceController.text.isNotEmpty) {
+                final balanceText = balanceController.text.trim();
+                final balance = double.tryParse(balanceText);
+                if (balance != null) {
+                  await _saveStartBalance(balance);
+                  Navigator.of(context).pop();
+                } else {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Please enter a valid number')),
+                  );
+                }
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Please enter a balance amount')),
+                );
+              }
+            },
+            child: const Text('Start'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _showEndSaleDialog() async {
+    final TextEditingController balanceController = TextEditingController();
+    
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('End Sale Session'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('Enter your ending wallet balance:'),
+            const SizedBox(height: 16),
+            TextField(
+              controller: balanceController,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              inputFormatters: [
+                FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,2}')),
+              ],
+              decoration: const InputDecoration(
+                labelText: 'Ending Balance (₹)',
+                border: OutlineInputBorder(),
+                prefixText: '₹ ',
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              if (balanceController.text.isNotEmpty) {
+                final balanceText = balanceController.text.trim();
+                final balance = double.tryParse(balanceText);
+                if (balance != null) {
+                  await _saveEndBalance(balance);
+                  Navigator.of(context).pop();
+                } else {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Please enter a valid number')),
+                  );
+                }
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Please enter a balance amount')),
+                );
+              }
+            },
+            child: const Text('End'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _testWalletBalanceTable() async {
+    try {
+      print('Debug: Testing wallet_balances table accessibility...');
+      
+      final user = Supabase.instance.client.auth.currentUser;
+      if (user == null) {
+        print('Debug: No authenticated user');
+        return;
+      }
+      
+      // Test if we can read from the table
+      final readTest = await Supabase.instance.client
+          .from(AppConstants.walletBalanceTable)
+          .select('*')
+          .limit(1);
+      print('Debug: Read test successful: $readTest');
+      
+      // Test if user exists in users table
+      final userTest = await Supabase.instance.client
+          .from(AppConstants.usersTable)
+          .select('id, email, name, role')
+          .eq('id', user.id);
+      print('Debug: User in users table: $userTest');
+      
+    } catch (e) {
+      print('Debug: Wallet balance table test failed: $e');
+    }
+  }
+
+  Future<void> _saveStartBalance(double balance) async {
+    // Run test first
+    await _testWalletBalanceTable();
+    
+    try {
+      final user = Supabase.instance.client.auth.currentUser;
+      print('Debug: Current user: ${user?.id}');
+      print('Debug: User email: ${user?.email}');
+      print('Debug: Supabase enabled: ${AppConstants.enableSupabase}');
+      print('Debug: Wallet table name: ${AppConstants.walletBalanceTable}');
+      
+      if (user != null && AppConstants.enableSupabase) {
+        // First, verify the user exists in the users table
+        try {
+          final userRecord = await Supabase.instance.client
+              .from(AppConstants.usersTable)
+              .select('id, name, role')
+              .eq('id', user.id)
+              .single();
+          print('Debug: User record found: $userRecord');
+        } catch (userError) {
+          print('Debug: User not found in users table: $userError');
+          // Try to create the user record manually
+          try {
+            await Supabase.instance.client
+                .from(AppConstants.usersTable)
+                .insert({
+                  'id': user.id,
+                  'email': user.email ?? '',
+                  'name': user.email?.split('@').first ?? 'User',
+                  'role': 'staff',
+                });
+            print('Debug: User record created manually');
+          } catch (createError) {
+            print('Debug: Failed to create user record: $createError');
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('User setup error: $createError'),
+                  backgroundColor: Colors.red,
+                ),
+              );
+            }
+            return;
+          }
+        }
+        
+        final today = DateTime.now().toIso8601String().substring(0, 10);
+        print('Debug: Today date: $today');
+        
+        // Check if there's already an open session for today
+        final existingSession = await Supabase.instance.client
+            .from(AppConstants.walletBalanceTable)
+            .select()
+            .eq('user_id', user.id)
+            .eq('date', today)
+            .eq('status', 'opened');
+            
+        print('Debug: Existing sessions: $existingSession');
+        
+        if (existingSession.isNotEmpty) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('You already have an active session for today')),
+            );
+          }
+          return;
+        }
+        
+        final data = {
+          'user_id': user.id,
+  Future<void> _testWalletBalanceTable() async {
+    try {
+      print('Debug: Testing wallet_balances table accessibility...');
+      final user = Supabase.instance.client.auth.currentUser;
+      if (user == null) {
+        print('Debug: No authenticated user');
+        return;
+      }
+      // Test if we can read from the table
+      final readTest = await Supabase.instance.client
+          .from(AppConstants.walletBalanceTable)
+          .select('*')
+          .limit(1);
+      print('Debug: Read test successful: $readTest');
+      // Test if user exists in users table
+      final userTest = await Supabase.instance.client
+          .from(AppConstants.usersTable)
+          .select('id, email, name, role')
+          .eq('id', user.id);
+      print('Debug: User in users table: $userTest');
+    } catch (e) {
+      print('Debug: Wallet balance table test failed: $e');
+    }
+  }
+
+  Future<void> _saveStartBalance(double balance) async {
+    // Run test first
+    await _testWalletBalanceTable();
+    try {
+      final user = Supabase.instance.client.auth.currentUser;
+      print('Debug: Current user: ${user?.id}');
+      print('Debug: User email: ${user?.email}');
+      print('Debug: Supabase enabled: ${AppConstants.enableSupabase}');
+      print('Debug: Wallet table name: ${AppConstants.walletBalanceTable}');
+      if (user != null && AppConstants.enableSupabase) {
+        // Ensure user exists in public.users
+        try {
+          final existingUserCheck = await Supabase.instance.client
+              .from(AppConstants.usersTable)
+              .select('id')
+              .eq('id', user.id);
+          print('Debug: Existing user check: $existingUserCheck');
+          if (existingUserCheck.isEmpty) {
+            print('Debug: Creating user in public.users table');
+            await Supabase.instance.client
+                .from(AppConstants.usersTable)
+                .insert({
+                  'id': user.id,
+                  'email': user.email ?? '',
+                  'name': user.email?.split('@')[0] ?? 'Staff Member',
+                  'role': 'staff',
+                });
+            print('Debug: User created successfully');
+          } else {
+            print('Debug: User already exists in public.users');
+          }
+        } catch (userError) {
+          print('Debug: Error checking/creating user: $userError');
+        }
+        final today = DateTime.now().toIso8601String().substring(0, 10);
+        print('Debug: Today date: $today');
+        // Check if there's already an open session for today
+        final existingSession = await Supabase.instance.client
+            .from(AppConstants.walletBalanceTable)
+            .select()
+            .eq('user_id', user.id)
+            .eq('date', today)
+            .eq('status', 'opened');
+        print('Debug: Existing sessions: $existingSession');
+        if (existingSession.isNotEmpty) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('You already have an active session for today'),
+                backgroundColor: Colors.orange,
+              ),
+            );
+          }
+          return;
+        }
+        final data = {
+          'user_id': user.id,
+          'opening_balance': balance,
+          'closing_balance': null,
+          'date': today,
+          'status': 'opened',
+        };
+        print('Debug: Inserting wallet balance data: $data');
+        final response = await Supabase.instance.client
+            .from(AppConstants.walletBalanceTable)
+            .insert(data)
+            .select();
+        print('Debug: Insert response: $response');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Sale session started successfully'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+      } else {
+        print('Debug: User is null or Supabase disabled');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Authentication required to start session')),
+          );
+        }
+      }
+    } catch (e) {
+      print('Debug: Error starting sale session: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error starting sale session: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+      print('Debug: Error ending sale session: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error ending sale session: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
   Color _getStatusColor(String status) {
     switch (status) {
       case 'completed':
@@ -171,6 +519,16 @@ class _SalesPageState extends State<SalesPage> {
         backgroundColor: AppTheme.primaryColor,
         foregroundColor: Colors.white,
         actions: [
+          IconButton(
+            icon: const Icon(Icons.play_arrow),
+            onPressed: _showStartSaleDialog,
+            tooltip: 'Start Sale Session',
+          ),
+          IconButton(
+            icon: const Icon(Icons.stop),
+            onPressed: _showEndSaleDialog,
+            tooltip: 'End Sale Session',
+          ),
           IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: _loadSales,
