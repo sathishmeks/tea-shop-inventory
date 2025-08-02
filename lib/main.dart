@@ -57,7 +57,8 @@ class _TeaShopAppState extends State<TeaShopApp> {
       child: MaterialApp(
         title: AppConstants.appName,
         theme: AppTheme.lightTheme,
-        darkTheme: AppTheme.darkTheme,
+        darkTheme: AppTheme.lightTheme, // Force light theme to avoid dark appearance
+        themeMode: ThemeMode.light, // Force light mode
         locale: LanguageService.currentLocale,
         localizationsDelegates: const [
           AppLocalizations.delegate,

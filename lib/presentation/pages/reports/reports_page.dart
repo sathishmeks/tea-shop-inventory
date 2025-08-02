@@ -26,35 +26,59 @@ class _ReportsPageState extends State<ReportsPage> {
   @override
   void initState() {
     super.initState();
-    _getCurrentUser();
-    _loadReports();
+    _loadReports(); // This will now call _getCurrentUser() first
   }
 
   Future<void> _getCurrentUser() async {
     final user = Supabase.instance.client.auth.currentUser;
-    if (user != null && AppConstants.enableSupabase) {
-      try {
-        final response = await Supabase.instance.client
-            .from(AppConstants.usersTable)
-            .select('role')
-            .eq('id', user.id)
-            .single();
-        
-        setState(() {
-          _currentUserRole = response['role'] ?? AppConstants.roleStaff;
-          _currentUserId = user.id;
-        });
-      } catch (e) {
+    print('DEBUG: Current user: ${user?.id}');
+    print('DEBUG: Supabase enabled: ${AppConstants.enableSupabase}');
+    
+    if (user != null) {
+      if (AppConstants.enableSupabase) {
+        try {
+          final response = await Supabase.instance.client
+              .from(AppConstants.usersTable)
+              .select('role')
+              .eq('id', user.id)
+              .single();
+          
+          setState(() {
+            _currentUserRole = response['role'] ?? AppConstants.roleStaff;
+            _currentUserId = user.id;
+          });
+          print('DEBUG: User role from DB: ${_currentUserRole}');
+        } catch (e) {
+          print('DEBUG: Error getting user role: $e');
+          setState(() {
+            _currentUserRole = AppConstants.roleStaff;
+            _currentUserId = user.id;
+          });
+        }
+      } else {
+        // Even if Supabase is disabled, set the user ID
         setState(() {
           _currentUserRole = AppConstants.roleStaff;
           _currentUserId = user.id;
         });
       }
+    } else {
+      print('DEBUG: No authenticated user found');
+      setState(() {
+        _currentUserRole = AppConstants.roleStaff;
+        _currentUserId = null;
+      });
     }
+    
+    print('DEBUG: Final _currentUserId: $_currentUserId');
+    print('DEBUG: Final _currentUserRole: $_currentUserRole');
   }
 
   Future<void> _loadReports() async {
     setState(() => _isLoading = true);
+    
+    // Ensure user is loaded first
+    await _getCurrentUser();
     
     try {
       await Future.wait([
@@ -78,9 +102,9 @@ class _ReportsPageState extends State<ReportsPage> {
   }
 
   Future<void> _loadSalesReport() async {
+    print('DEBUG: Loading sales report - _currentUserId: $_currentUserId');
     if (!AppConstants.enableSupabase || _currentUserId == null) {
-      _salesReport = _getMockSalesReport();
-      return;
+      throw Exception('Supabase is disabled or user not authenticated');
     }
 
     try {
@@ -104,14 +128,14 @@ class _ReportsPageState extends State<ReportsPage> {
         _salesReport = allSales;
       }
     } catch (e) {
-      _salesReport = _getMockSalesReport();
+      print('Error loading sales report: $e');
+      throw Exception('Failed to load sales report: $e');
     }
   }
 
   Future<void> _loadInventoryReport() async {
     if (!AppConstants.enableSupabase) {
-      _inventoryReport = _getMockInventoryReport();
-      return;
+      throw Exception('Supabase is disabled');
     }
 
     try {
@@ -165,35 +189,121 @@ class _ReportsPageState extends State<ReportsPage> {
         'staff_removals': staffRemovals,
       };
     } catch (e) {
-      _inventoryReport = _getMockInventoryReport();
+      print('Error loading inventory report: $e');
+      throw Exception('Failed to load inventory report: $e');
     }
   }
 
   Future<void> _loadWalletBalanceReport() async {
+    print('DEBUG: Loading wallet balance report - _currentUserId: $_currentUserId');
     if (!AppConstants.enableSupabase || _currentUserId == null) {
-      _walletBalanceReport = [];
-      return;
+      throw Exception('Supabase is disabled or user not authenticated');
     }
 
     try {
+      // First get wallet balances without joining users table
       var walletQuery = Supabase.instance.client
           .from(AppConstants.walletBalanceTable)
-          .select('*, users!inner(name)')
+          .select('*')
           .gte('date', _selectedStartDate.toIso8601String().substring(0, 10))
           .lte('date', _selectedEndDate.toIso8601String().substring(0, 10))
           .order('date', ascending: false);
 
-      final response = await walletQuery;
-      List<Map<String, dynamic>> allBalances = List<Map<String, dynamic>>.from(response);
+      final walletResponse = await walletQuery;
+      List<Map<String, dynamic>> allBalances = List<Map<String, dynamic>>.from(walletResponse);
 
-      // Filter by user role in code instead of query
+      // Filter by user role
+      List<Map<String, dynamic>> filteredBalances;
       if (_currentUserRole == AppConstants.roleStaff) {
-        _walletBalanceReport = allBalances.where((balance) => balance['user_id'] == _currentUserId).toList();
+        filteredBalances = allBalances.where((balance) => balance['user_id'] == _currentUserId).toList();
       } else {
-        _walletBalanceReport = allBalances;
+        filteredBalances = allBalances;
+      }
+
+      // For each wallet balance session, calculate the total sales for that session period
+      for (int i = 0; i < filteredBalances.length; i++) {
+        final balance = filteredBalances[i];
+        final sessionUserId = balance['user_id'] as String;
+        final sessionStartTime = balance['created_at'] as String;
+        final sessionEndTime = balance['updated_at'] as String?;
+        
+        try {
+          // Get sales for this specific session period (between session start and end times)
+          var salesQuery = Supabase.instance.client
+              .from(AppConstants.salesTable)
+              .select('total_amount')
+              .eq('created_by', sessionUserId)
+              .gte('sale_date', sessionStartTime);
+          
+          // If session is closed, limit to session end time, otherwise use current time
+          if (sessionEndTime != null && balance['status'] == 'closed') {
+            salesQuery = salesQuery.lte('sale_date', sessionEndTime);
+          }
+
+          final salesResponse = await salesQuery;
+          final salesList = List<Map<String, dynamic>>.from(salesResponse);
+          
+          // Calculate total sales for that session
+          final totalSales = salesList.fold<double>(0.0, (sum, sale) {
+            final amount = sale['total_amount'];
+            if (amount is num) {
+              return sum + amount.toDouble();
+            }
+            return sum;
+          });
+          
+          // Add total sales to the balance record
+          filteredBalances[i] = {...balance, 'total_sales': totalSales};
+          
+          print('Debug: Session ${balance['id']}: Start: $sessionStartTime, End: $sessionEndTime, Sales: $totalSales');
+        } catch (salesError) {
+          print('Warning: Could not fetch sales for session ${balance['id']}: $salesError');
+          // Add zero sales if we can't fetch them
+          filteredBalances[i] = {...balance, 'total_sales': 0.0};
+        }
+      }
+
+      // If admin, get user names separately
+      if (_currentUserRole == AppConstants.roleAdmin && filteredBalances.isNotEmpty) {
+        try {
+          // Get unique user IDs
+          final userIds = filteredBalances.map((balance) => balance['user_id']).toSet().toList();
+          
+          // Fetch user names one by one (safer approach)
+          final usersMap = <String, String>{};
+          for (final userId in userIds) {
+            try {
+              final userResponse = await Supabase.instance.client
+                  .from(AppConstants.usersTable)
+                  .select('id, name')
+                  .eq('id', userId)
+                  .single();
+              usersMap[userId] = userResponse['name'] ?? 'Unknown';
+            } catch (e) {
+              usersMap[userId] = 'User ${userId.substring(0, 8)}';
+            }
+          }
+          
+          // Add user names to wallet balance records
+          _walletBalanceReport = filteredBalances.map((balance) {
+            final userMap = {'name': usersMap[balance['user_id']] ?? 'Unknown'};
+            return {...balance, 'users': userMap};
+          }).toList();
+        } catch (userError) {
+          print('Warning: Could not fetch user names: $userError');
+          // Fallback: use wallet balances without user names
+          _walletBalanceReport = filteredBalances.map((balance) {
+            final userMap = {'name': 'User ${balance['user_id']?.substring(0, 8) ?? 'Unknown'}'};
+            return {...balance, 'users': userMap};
+          }).toList();
+        }
+      } else {
+        // For staff, we don't need user names since it's only their own data
+        _walletBalanceReport = filteredBalances;
       }
     } catch (e) {
-      _walletBalanceReport = [];
+      print('Error loading wallet balance report: $e');
+      throw Exception('Failed to load wallet balance report: $e');
     }
   }
 
@@ -215,52 +325,6 @@ class _ReportsPageState extends State<ReportsPage> {
       'cancelled_sales': cancelledSales,
       'low_stock_count': (_inventoryReport['low_stock_items'] as List?)?.length ?? 0,
       'inventory_movements': (_inventoryReport['movements'] as List?)?.length ?? 0,
-    };
-  }
-
-  List<Sale> _getMockSalesReport() {
-    return [
-      Sale(
-        id: '1',
-        saleNumber: 'S001',
-        totalAmount: 150.00,
-        status: 'completed',
-        paymentMethod: 'cash',
-        saleDate: DateTime.now().subtract(const Duration(days: 1)),
-        createdBy: _currentUserId ?? 'user-1',
-      ),
-      Sale(
-        id: '2',
-        saleNumber: 'S002',
-        totalAmount: 250.00,
-        status: 'completed',
-        paymentMethod: 'upi',
-        saleDate: DateTime.now().subtract(const Duration(days: 2)),
-        createdBy: _currentUserId ?? 'user-1',
-      ),
-    ];
-  }
-
-  Map<String, dynamic> _getMockInventoryReport() {
-    return {
-      'low_stock_items': [
-        {'name': 'Earl Grey Tea', 'stock_quantity': 5, 'minimum_stock': 10},
-        {'name': 'Green Tea', 'stock_quantity': 8, 'minimum_stock': 10},
-      ],
-      'movements': [
-        {
-          'type': 'sale',
-          'quantity': -2,
-          'created_at': DateTime.now().subtract(const Duration(hours: 1)).toIso8601String(),
-          'products': {'name': 'Earl Grey Tea'},
-        },
-        {
-          'type': 'restock',
-          'quantity': 20,
-          'created_at': DateTime.now().subtract(const Duration(hours: 3)).toIso8601String(),
-          'products': {'name': 'Green Tea'},
-        },
-      ],
     };
   }
 
@@ -842,12 +906,21 @@ class _ReportsPageState extends State<ReportsPage> {
                 ...(_walletBalanceReport.take(5).map((balance) {
                   final openingBalance = balance['opening_balance'] as double;
                   final closingBalance = balance['closing_balance'] as double?;
-                  final difference = closingBalance != null ? closingBalance - openingBalance : 0.0;
+                  final totalSales = balance['total_sales'] as double? ?? 0.0;
+                  
+                  // Calculate expected closing balance: opening balance + total sales
+                  final expectedClosingBalance = openingBalance + totalSales;
+                  
+                  // Calculate difference: actual closing - expected closing
+                  final difference = closingBalance != null ? closingBalance - expectedClosingBalance : 0.0;
+                  
                   final status = balance['status'] as String;
                   final date = DateTime.parse(balance['date']);
-                  final userName = _currentUserRole == AppConstants.roleAdmin 
-                      ? balance['users']['name'] ?? 'Unknown' 
-                      : 'You';
+                  String userName = 'You';
+                  if (_currentUserRole == AppConstants.roleAdmin) {
+                    final users = balance['users'] as Map<String, dynamic>?;
+                    userName = users?['name'] ?? 'Unknown';
+                  }
                   
                   return ListTile(
                     leading: Icon(
@@ -859,12 +932,15 @@ class _ReportsPageState extends State<ReportsPage> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text('Opening: ₹${openingBalance.toStringAsFixed(2)}'),
+                        Text('Sales: ₹${totalSales.toStringAsFixed(2)}'),
+                        Text('Expected: ₹${expectedClosingBalance.toStringAsFixed(2)}'),
                         if (closingBalance != null) ...[
-                          Text('Closing: ₹${closingBalance.toStringAsFixed(2)}'),
+                          Text('Actual Closing: ₹${closingBalance.toStringAsFixed(2)}'),
                           Text(
                             'Difference: ₹${difference.toStringAsFixed(2)}',
                             style: TextStyle(
-                              color: difference >= 0 ? AppTheme.successColor : AppTheme.errorColor,
+                              color: difference.abs() < 0.01 ? AppTheme.successColor : 
+                                     difference > 0 ? Colors.blue : AppTheme.errorColor,
                               fontWeight: FontWeight.bold,
                             ),
                           ),

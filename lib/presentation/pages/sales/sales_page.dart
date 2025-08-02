@@ -19,11 +19,13 @@ class _SalesPageState extends State<SalesPage> {
   bool _isLoading = true;
   String _searchQuery = '';
   DateTime? _selectedDate;
+  bool _hasActiveSession = false;
 
   @override
   void initState() {
     super.initState();
     _loadSales();
+    _checkActiveSession();
   }
 
   Future<void> _loadSales() async {
@@ -133,6 +135,35 @@ class _SalesPageState extends State<SalesPage> {
 
   String _formatTime(DateTime date) {
     return '${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}';
+  }
+
+  Future<void> _checkActiveSession() async {
+    try {
+      final user = Supabase.instance.client.auth.currentUser;
+      if (user != null && AppConstants.enableSupabase) {
+        final today = DateTime.now().toIso8601String().substring(0, 10);
+        
+        final existingSession = await Supabase.instance.client
+            .from(AppConstants.walletBalanceTable)
+            .select()
+            .eq('user_id', user.id)
+            .eq('date', today)
+            .eq('status', 'opened');
+            
+        setState(() {
+          _hasActiveSession = existingSession.isNotEmpty;
+        });
+      } else {
+        setState(() {
+          _hasActiveSession = false;
+        });
+      }
+    } catch (e) {
+      print('Debug: Error checking active session: $e');
+      setState(() {
+        _hasActiveSession = false;
+      });
+    }
   }
 
   Future<void> _showStartSaleDialog() async {
@@ -328,23 +359,70 @@ class _SalesPageState extends State<SalesPage> {
         final today = DateTime.now().toIso8601String().substring(0, 10);
         print('Debug: Today date: $today');
         
-        // Check if there's already an open session for today
+        // Check if there's already ANY session for today (opened or closed)
         final existingSession = await Supabase.instance.client
             .from(AppConstants.walletBalanceTable)
             .select()
             .eq('user_id', user.id)
             .eq('date', today)
-            .eq('status', 'opened');
+            .order('created_at', ascending: false)
+            .limit(1);
             
         print('Debug: Existing sessions: $existingSession');
         
         if (existingSession.isNotEmpty) {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('You already have an active session for today')),
-            );
+          final session = existingSession.first;
+          final status = session['status'];
+          
+          if (status == 'opened') {
+            if (mounted) {
+              setState(() {
+                _hasActiveSession = true;
+              });
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('You already have an active session for today')),
+              );
+            }
+            return;
+          } else if (status == 'closed') {
+            // Previous session is closed, but we can't create a new record for the same day
+            // Instead, reopen the existing session with new opening balance
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('Reopening session for today. Previous session: Opening ₹${session['opening_balance']}, Closing ₹${session['closing_balance']}'),
+                  duration: const Duration(seconds: 3),
+                ),
+              );
+            }
+            
+            // Update the existing record to reopen it
+            final updateResponse = await Supabase.instance.client
+                .from(AppConstants.walletBalanceTable)
+                .update({
+                  'opening_balance': balance,
+                  'closing_balance': null,
+                  'status': 'opened',
+                  'updated_at': DateTime.now().toIso8601String(),
+                })
+                .eq('id', session['id'])
+                .select();
+                
+            print('Debug: Reopened session: $updateResponse');
+            
+            if (mounted) {
+              setState(() {
+                _hasActiveSession = true;
+              });
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Sale session reopened successfully'),
+                  backgroundColor: Colors.green,
+                ),
+              );
+            }
+            return; // Don't create a new record, we've updated the existing one
           }
-          return;
         }
         
         final data = {
@@ -364,6 +442,9 @@ class _SalesPageState extends State<SalesPage> {
         print('Debug: Insert response: $response');
         
         if (mounted) {
+          setState(() {
+            _hasActiveSession = true;
+          });
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
               content: Text('Sale session started successfully'),
@@ -431,16 +512,72 @@ class _SalesPageState extends State<SalesPage> {
 
           print('Debug: Update response: $updateResponse');
 
-          // Check if balances tally
-          final difference = balance - openingBalance;
+          // Calculate total sales for this session (between session start and end times)
+          final sessionId = record['id'];
+          final sessionStartTime = record['created_at'] as String;
+          final sessionEndTime = record['updated_at'] as String;
+          double totalSales = 0.0;
+          
+          try {
+            final salesQuery = Supabase.instance.client
+                .from(AppConstants.salesTable)
+                .select('total_amount')
+                .eq('created_by', user.id)
+                .gte('sale_date', sessionStartTime)
+                .lte('sale_date', sessionEndTime);
+
+            final salesResponse = await salesQuery;
+            final salesList = List<Map<String, dynamic>>.from(salesResponse);
+            
+            totalSales = salesList.fold<double>(0.0, (sum, sale) {
+              final amount = sale['total_amount'];
+              if (amount is num) {
+                return sum + amount.toDouble();
+              }
+              return sum;
+            });
+            
+            print('Debug: Session ID: $sessionId');
+            print('Debug: Session start: $sessionStartTime');
+            print('Debug: Session end: $sessionEndTime');
+            print('Debug: Sales between session times: $totalSales');
+          } catch (salesError) {
+            print('Debug: Could not fetch session-specific sales total: $salesError');
+            totalSales = 0.0;
+          }
+
+          // Calculate expected closing balance: opening balance + total sales
+          final expectedClosingBalance = openingBalance + totalSales;
+          
+          // Calculate difference: actual closing - expected closing
+          final difference = balance - expectedClosingBalance;
+          
+          print('Debug: Opening: $openingBalance, Sales: $totalSales, Expected: $expectedClosingBalance, Actual: $balance, Difference: $difference');
           
           if (mounted) {
+            setState(() {
+              _hasActiveSession = false;
+            });
+            
+            String message;
+            Color backgroundColor;
+            
+            if (difference.abs() < 0.01) {
+              message = 'Session ended. Balances match perfectly! (Sales: ₹${totalSales.toStringAsFixed(2)})';
+              backgroundColor = Colors.green;
+            } else if (difference > 0) {
+              message = 'Session ended. Extra cash: ₹${difference.toStringAsFixed(2)} (Sales: ₹${totalSales.toStringAsFixed(2)})';
+              backgroundColor = Colors.blue;
+            } else {
+              message = 'Session ended. Short cash: ₹${difference.abs().toStringAsFixed(2)} (Sales: ₹${totalSales.toStringAsFixed(2)})';
+              backgroundColor = Colors.orange;
+            }
+            
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
-                content: Text(
-                  'Sale session ended. Balance difference: ₹${difference.toStringAsFixed(2)}'
-                ),
-                backgroundColor: difference >= 0 ? Colors.green : Colors.orange,
+                content: Text(message),
+                backgroundColor: backgroundColor,
+                duration: const Duration(seconds: 5),
               ),
             );
           }
@@ -508,16 +645,18 @@ class _SalesPageState extends State<SalesPage> {
         backgroundColor: AppTheme.primaryColor,
         foregroundColor: Colors.white,
         actions: [
-          IconButton(
-            icon: const Icon(Icons.play_arrow),
-            onPressed: _showStartSaleDialog,
-            tooltip: 'Start Sale Session',
-          ),
-          IconButton(
-            icon: const Icon(Icons.stop),
-            onPressed: _showEndSaleDialog,
-            tooltip: 'End Sale Session',
-          ),
+          if (!_hasActiveSession)
+            IconButton(
+              icon: const Icon(Icons.play_arrow),
+              onPressed: _showStartSaleDialog,
+              tooltip: 'Start Sale Session',
+            ),
+          if (_hasActiveSession)
+            IconButton(
+              icon: const Icon(Icons.stop),
+              onPressed: _showEndSaleDialog,
+              tooltip: 'End Sale Session',
+            ),
           IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: _loadSales,
