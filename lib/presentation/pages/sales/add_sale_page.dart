@@ -195,7 +195,7 @@ class _AddSalePageState extends State<AddSalePage> {
       final productIndex = _products.indexWhere((p) => p.id == cartItem.productId);
       if (productIndex >= 0) {
         final currentProduct = _products[productIndex];
-        final newStockQuantity = currentProduct.stockQuantity - cartItem.quantity;
+        final newStockQuantity = currentProduct.stockQuantity - cartItem.quantity.toInt();
         
         _products[productIndex] = currentProduct.copyWith(
           stockQuantity: newStockQuantity,
@@ -296,7 +296,7 @@ class _AddSalePageState extends State<AddSalePage> {
             final product = _products.firstWhere(
               (p) => p.id == cartItem.productId,
             );
-            final newStockQuantity = product.stockQuantity - cartItem.quantity;
+            final newStockQuantity = product.stockQuantity - cartItem.quantity.toInt();
             
             await Supabase.instance.client
                 .from('products')
