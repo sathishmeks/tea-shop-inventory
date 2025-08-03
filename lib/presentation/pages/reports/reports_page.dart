@@ -4,6 +4,7 @@ import '../../../core/themes/app_theme.dart';
 import '../../../core/constants/app_constants.dart';
 import '../../../domain/entities/sale.dart';
 import '../../widgets/loading_widget.dart';
+import 'sales_session_report_page.dart';
 
 class ReportsPage extends StatefulWidget {
   const ReportsPage({super.key});
@@ -400,6 +401,10 @@ class _ReportsPageState extends State<ReportsPage> {
 
                   // Sales Report
                   _buildSalesReportSection(),
+                  const SizedBox(height: 16),
+
+                  // Sales Session Report
+                  _buildSalesSessionReportSection(),
                   const SizedBox(height: 16),
 
                   // Inventory Report
@@ -991,6 +996,141 @@ class _ReportsPageState extends State<ReportsPage> {
                       const SizedBox(height: 8),
                       Text(
                         'Start a sale session to track wallet balances',
+                        style: TextStyle(color: AppTheme.textSecondary, fontSize: 12),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSalesSessionReportSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Sales Session Reports',
+          style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+            fontWeight: FontWeight.bold,
+            color: AppTheme.primaryColor,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Card(
+          child: Column(
+            children: [
+              if (_walletBalanceReport.isNotEmpty) ...[
+                Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Row(
+                    children: [
+                      Icon(Icons.description, color: AppTheme.primaryColor),
+                      const SizedBox(width: 8),
+                      const Text(
+                        'Click on any session to view detailed report',
+                        style: TextStyle(fontWeight: FontWeight.w500),
+                      ),
+                    ],
+                  ),
+                ),
+                const Divider(),
+                ListView.builder(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  itemCount: _walletBalanceReport.length > 5 ? 5 : _walletBalanceReport.length,
+                  itemBuilder: (context, index) {
+                    final session = _walletBalanceReport[index];
+                    final sessionDate = DateTime.parse(session['date']);
+                    final totalSales = (session['total_sales'] as num?)?.toDouble() ?? 0.0;
+                    final openingBalance = (session['opening_balance'] as num?)?.toDouble() ?? 0.0;
+                    final closingBalance = (session['closing_balance'] as num?)?.toDouble() ?? 0.0;
+                    final status = session['status'] ?? 'unknown';
+                    final userName = session['user_name'] ?? 'Unknown User';
+
+                    return ListTile(
+                      leading: CircleAvatar(
+                        backgroundColor: status == 'closed' ? AppTheme.successColor : AppTheme.warningColor,
+                        child: Icon(
+                          status == 'closed' ? Icons.check : Icons.access_time,
+                          color: Colors.white,
+                          size: 18,
+                        ),
+                      ),
+                      title: Text(
+                        '${sessionDate.day}/${sessionDate.month}/${sessionDate.year} - $userName',
+                        style: const TextStyle(fontWeight: FontWeight.w500),
+                      ),
+                      subtitle: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Sales: ₹${totalSales.toStringAsFixed(2)}'),
+                          Text('Cash: ₹${openingBalance.toStringAsFixed(2)} → ₹${closingBalance.toStringAsFixed(2)}'),
+                        ],
+                      ),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: status == 'closed' ? AppTheme.successColor : AppTheme.warningColor,
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Text(
+                              status.toUpperCase(),
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Icon(Icons.arrow_forward_ios, size: 16, color: AppTheme.primaryColor),
+                        ],
+                      ),
+                      onTap: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => SalesSessionReportPage(
+                              sessionId: session['id'],
+                              sessionDate: sessionDate,
+                            ),
+                          ),
+                        );
+                      },
+                    );
+                  },
+                ),
+                if (_walletBalanceReport.length > 5)
+                  Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Text(
+                      'Showing 5 of ${_walletBalanceReport.length} sessions',
+                      style: TextStyle(color: AppTheme.textSecondary),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+              ] else ...[
+                Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    children: [
+                      Icon(Icons.description, size: 48, color: AppTheme.textSecondary),
+                      const SizedBox(height: 8),
+                      Text(
+                        'No session reports available',
+                        style: TextStyle(color: AppTheme.textSecondary),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Complete some sales sessions to generate reports',
                         style: TextStyle(color: AppTheme.textSecondary, fontSize: 12),
                       ),
                     ],
