@@ -26,11 +26,13 @@ class _AddProductPageState extends State<AddProductPage> {
   final _supplierController = TextEditingController();
   final _barcodeController = TextEditingController();
 
-  String _selectedCategory = 'Black Tea';
-  String _selectedUnit = 'kg';
+  String _selectedCategory = 'Drinks';
+  String _selectedUnit = 'bottle';
   bool _isLoading = false;
 
   final List<String> _categories = [
+    'Drinks',
+    'Snacks',
     'Black Tea',
     'Green Tea',
     'Herbal Tea',
@@ -40,7 +42,7 @@ class _AddProductPageState extends State<AddProductPage> {
     'Flavored Tea',
   ];
 
-  final List<String> _units = ['kg', 'g', 'pieces', 'packets', 'boxes'];
+  final List<String> _units = ['bottle', 'cup', 'packet', 'piece', 'kg', 'g', 'boxes'];
 
   @override
   void initState() {

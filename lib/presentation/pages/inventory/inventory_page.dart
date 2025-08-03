@@ -22,6 +22,8 @@ class _InventoryPageState extends State<InventoryPage> {
 
   final List<String> _categories = [
     'All',
+    'Drinks',
+    'Snacks',
     'Black Tea',
     'Green Tea',
     'Herbal Tea',
