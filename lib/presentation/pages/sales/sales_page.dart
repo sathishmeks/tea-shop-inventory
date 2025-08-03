@@ -4,12 +4,15 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:uuid/uuid.dart';
 import '../../../core/themes/app_theme.dart';
 import '../../../core/constants/app_constants.dart';
+import '../../../core/services/stock_snapshot_service.dart';
 import '../../../domain/entities/sale.dart';
 import '../../../domain/entities/sales_history.dart';
+import '../../../domain/entities/stock_snapshot.dart';
 import '../../widgets/loading_widget.dart';
 import 'add_sale_page.dart';
 import 'edit_sale_page.dart';
 import 'sales_history_page.dart';
+import 'stock_verification_page.dart';
 
 class SalesPage extends StatefulWidget {
   const SalesPage({super.key});
@@ -264,8 +267,8 @@ class _SalesPageState extends State<SalesPage> {
                 final balanceText = balanceController.text.trim();
                 final balance = double.tryParse(balanceText);
                 if (balance != null) {
-                  await _saveEndBalance(balance);
                   Navigator.of(context).pop();
+                  await _processSessionEnd(balance);
                 } else {
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(content: Text('Please enter a valid number')),
@@ -277,11 +280,359 @@ class _SalesPageState extends State<SalesPage> {
                 );
               }
             },
-            child: const Text('End'),
+            child: const Text('Continue'),
           ),
         ],
       ),
     );
+  }
+
+  /// Process session end with discrepancy validation
+  Future<void> _processSessionEnd(double closingBalance) async {
+    try {
+      final user = Supabase.instance.client.auth.currentUser;
+      if (user == null || !AppConstants.enableSupabase) {
+        await _saveEndBalance(closingBalance);
+        return;
+      }
+
+      // Get current session info
+      final today = DateTime.now().toIso8601String().substring(0, 10);
+      final response = await Supabase.instance.client
+          .from(AppConstants.walletBalanceTable)
+          .select()
+          .eq('user_id', user.id)
+          .eq('date', today)
+          .eq('status', 'opened')
+          .order('created_at', ascending: false)
+          .limit(1);
+
+      if (response.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('No active session found'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+        return;
+      }
+
+      final record = response.first;
+      final openingBalance = record['opening_balance'] as double;
+      final sessionId = record['id'];
+
+      // Calculate cash discrepancy
+      final salesResponse = await Supabase.instance.client
+          .from(AppConstants.salesTable)
+          .select('total_amount')
+          .eq('created_by', user.id)
+          .gte('sale_date', record['created_at'])
+          .lte('sale_date', DateTime.now().toIso8601String());
+
+      final totalSales = (salesResponse as List).fold<double>(0.0, (sum, sale) {
+        final amount = sale['total_amount'];
+        return sum + (amount is num ? amount.toDouble() : 0.0);
+      });
+
+      final expectedClosingBalance = openingBalance + totalSales;
+      final cashDifference = closingBalance - expectedClosingBalance;
+      final hasCashDiscrepancy = cashDifference.abs() >= 0.01;
+
+      // Create end stock snapshot to check for stock discrepancies
+      try {
+        await StockSnapshotService.createSessionEndSnapshot(
+          sessionId: sessionId,
+          userId: user.id,
+        );
+      } catch (e) {
+        print('Warning: Could not create end stock snapshot: $e');
+      }
+
+      // Check for stock discrepancies
+      Map<String, dynamic> stockSummary = {};
+      bool hasStockDiscrepancy = false;
+      
+      try {
+        stockSummary = await StockSnapshotService.getVerificationSummary(sessionId);
+        hasStockDiscrepancy = stockSummary['has_snapshots'] == true && 
+                             stockSummary['discrepancy_count'] > 0;
+      } catch (e) {
+        print('Warning: Could not get stock verification summary: $e');
+      }
+
+      // If there are discrepancies, require a reason
+      if (hasCashDiscrepancy || hasStockDiscrepancy) {
+        final reason = await _showDiscrepancyReasonDialog(
+          cashDifference: cashDifference,
+          hasCashDiscrepancy: hasCashDiscrepancy,
+          hasStockDiscrepancy: hasStockDiscrepancy,
+          stockSummary: stockSummary,
+          totalSales: totalSales,
+        );
+
+        if (reason == null) {
+          // User cancelled - don't close session
+          return;
+        }
+
+        // Save end balance with reason
+        await _saveEndBalanceWithReason(closingBalance, reason);
+      } else {
+        // No discrepancies - proceed normally
+        await _saveEndBalance(closingBalance);
+      }
+    } catch (e) {
+      print('Error processing session end: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error ending session: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  /// Show dialog to collect reason for discrepancies
+  Future<String?> _showDiscrepancyReasonDialog({
+    required double cashDifference,
+    required bool hasCashDiscrepancy,
+    required bool hasStockDiscrepancy,
+    required Map<String, dynamic> stockSummary,
+    required double totalSales,
+  }) async {
+    final TextEditingController reasonController = TextEditingController();
+    
+    return showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(Icons.warning, color: Colors.orange),
+            const SizedBox(width: 8),
+            const Text('Discrepancies Found'),
+          ],
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'The following discrepancies were detected:',
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  color: AppTheme.textPrimary,
+                ),
+              ),
+              const SizedBox(height: 16),
+              
+              // Cash discrepancy
+              if (hasCashDiscrepancy) ...[
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.orange.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.orange.withOpacity(0.3)),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(Icons.account_balance_wallet, size: 16, color: Colors.orange),
+                          const SizedBox(width: 4),
+                          Text(
+                            'Cash Discrepancy',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: Colors.orange,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text('Sales: ₹${totalSales.toStringAsFixed(2)}'),
+                      Text(
+                        cashDifference > 0 
+                            ? 'Extra: ₹${cashDifference.toStringAsFixed(2)}'
+                            : 'Short: ₹${cashDifference.abs().toStringAsFixed(2)}',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: cashDifference > 0 ? Colors.blue : Colors.red,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+              ],
+              
+              // Stock discrepancy
+              if (hasStockDiscrepancy) ...[
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.red.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.red.withOpacity(0.3)),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(Icons.inventory, size: 16, color: Colors.red),
+                          const SizedBox(width: 4),
+                          Text(
+                            'Stock Discrepancy',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: Colors.red,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text('Products: ${stockSummary['total_products'] ?? 0}'),
+                      Text(
+                        'Discrepancies: ${stockSummary['discrepancy_count'] ?? 0}',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: Colors.red,
+                        ),
+                      ),
+                      Text(
+                        'Accuracy: ${(stockSummary['accuracy_percentage'] ?? 0.0).toStringAsFixed(1)}%',
+                        style: TextStyle(
+                          color: Colors.red.shade700,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+              ],
+              
+              Text(
+                'Please provide a reason for these discrepancies:',
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  color: AppTheme.textPrimary,
+                ),
+              ),
+              const SizedBox(height: 8),
+              
+              TextField(
+                controller: reasonController,
+                maxLines: 3,
+                decoration: const InputDecoration(
+                  labelText: 'Reason for discrepancies',
+                  hintText: 'e.g., Counting error, damaged products, customer refund, etc.',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(null),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              if (reasonController.text.trim().isEmpty) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Please provide a reason for the discrepancies'),
+                    backgroundColor: Colors.red,
+                  ),
+                );
+                return;
+              }
+              Navigator.of(context).pop(reasonController.text.trim());
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.primaryColor,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Submit'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Save end balance with discrepancy reason
+  Future<void> _saveEndBalanceWithReason(double balance, String reason) async {
+    try {
+      final user = Supabase.instance.client.auth.currentUser;
+      if (user == null || !AppConstants.enableSupabase) return;
+
+      final today = DateTime.now().toIso8601String().substring(0, 10);
+      final response = await Supabase.instance.client
+          .from(AppConstants.walletBalanceTable)
+          .select()
+          .eq('user_id', user.id)
+          .eq('date', today)
+          .eq('status', 'opened')
+          .order('created_at', ascending: false)
+          .limit(1);
+
+      if (response.isNotEmpty) {
+        final record = response.first;
+        final sessionId = record['id'];
+        
+        // Update session with reason
+        await Supabase.instance.client
+            .from(AppConstants.walletBalanceTable)
+            .update({
+              'closing_balance': balance,
+              'status': 'closed',
+              'notes': reason,
+              'updated_at': DateTime.now().toIso8601String(),
+            })
+            .eq('id', sessionId);
+
+        if (mounted) {
+          setState(() {
+            _hasActiveSession = false;
+          });
+          
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Session ended with noted discrepancies'),
+              backgroundColor: Colors.orange,
+              action: SnackBarAction(
+                label: 'View Details',
+                textColor: Colors.white,
+                onPressed: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => StockVerificationPage(sessionId: sessionId),
+                    ),
+                  );
+                },
+              ),
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      print('Error saving end balance with reason: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error ending session: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
   }
 
   Future<void> _testWalletBalanceTable() async {
@@ -445,13 +796,28 @@ class _SalesPageState extends State<SalesPage> {
             
         print('Debug: Insert response: $response');
         
+        // Create stock snapshot at session start
+        if (response.isNotEmpty) {
+          final sessionId = response.first['id'];
+          try {
+            await StockSnapshotService.createSessionStartSnapshot(
+              sessionId: sessionId,
+              userId: user.id,
+            );
+            print('Debug: Stock snapshot created for session start');
+          } catch (snapshotError) {
+            print('Warning: Could not create stock snapshot: $snapshotError');
+            // Continue even if snapshot fails - don't block session start
+          }
+        }
+        
         if (mounted) {
           setState(() {
             _hasActiveSession = true;
           });
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('Sale session started successfully'),
+              content: Text('Sale session started with stock verification'),
               backgroundColor: Colors.green,
             ),
           );
@@ -500,90 +866,26 @@ class _SalesPageState extends State<SalesPage> {
 
         if (response.isNotEmpty) {
           final record = response.first;
-          final openingBalance = record['opening_balance'] as double;
-          print('Debug: Opening balance: $openingBalance, Closing balance: $balance');
+          final sessionId = record['id'];
           
           // Update the record with closing balance and status
-          final updateResponse = await Supabase.instance.client
+          await Supabase.instance.client
               .from(AppConstants.walletBalanceTable)
               .update({
                 'closing_balance': balance,
                 'status': 'closed',
                 'updated_at': DateTime.now().toIso8601String(),
               })
-              .eq('id', record['id'])
-              .select();
+              .eq('id', sessionId);
 
-          print('Debug: Update response: $updateResponse');
-
-          // Calculate total sales for this session (between session start and end times)
-          final sessionId = record['id'];
-          final sessionStartTime = record['created_at'] as String;
-          final sessionEndTime = record['updated_at'] as String;
-          double totalSales = 0.0;
-          
-          try {
-            final salesQuery = Supabase.instance.client
-                .from(AppConstants.salesTable)
-                .select('total_amount')
-                .eq('created_by', user.id)
-                .gte('sale_date', sessionStartTime)
-                .lte('sale_date', sessionEndTime);
-
-            final salesResponse = await salesQuery;
-            final salesList = List<Map<String, dynamic>>.from(salesResponse);
-            
-            totalSales = salesList.fold<double>(0.0, (sum, sale) {
-              final amount = sale['total_amount'];
-              if (amount is num) {
-                return sum + amount.toDouble();
-              }
-              return sum;
-            });
-            
-            print('Debug: Session ID: $sessionId');
-            print('Debug: Session start: $sessionStartTime');
-            print('Debug: Session end: $sessionEndTime');
-            print('Debug: Sales between session times: $totalSales');
-          } catch (salesError) {
-            print('Debug: Could not fetch session-specific sales total: $salesError');
-            totalSales = 0.0;
-          }
-
-          // Calculate expected closing balance: opening balance + total sales
-          final expectedClosingBalance = openingBalance + totalSales;
-          
-          // Calculate difference: actual closing - expected closing
-          final difference = balance - expectedClosingBalance;
-          
-          print('Debug: Opening: $openingBalance, Sales: $totalSales, Expected: $expectedClosingBalance, Actual: $balance, Difference: $difference');
+          print('Debug: Session closed successfully');
           
           if (mounted) {
             setState(() {
               _hasActiveSession = false;
             });
             
-            String message;
-            Color backgroundColor;
-            
-            if (difference.abs() < 0.01) {
-              message = 'Session ended. Balances match perfectly! (Sales: ₹${totalSales.toStringAsFixed(2)})';
-              backgroundColor = Colors.green;
-            } else if (difference > 0) {
-              message = 'Session ended. Extra cash: ₹${difference.toStringAsFixed(2)} (Sales: ₹${totalSales.toStringAsFixed(2)})';
-              backgroundColor = Colors.blue;
-            } else {
-              message = 'Session ended. Short cash: ₹${difference.abs().toStringAsFixed(2)} (Sales: ₹${totalSales.toStringAsFixed(2)})';
-              backgroundColor = Colors.orange;
-            }
-            
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(message),
-                backgroundColor: backgroundColor,
-                duration: const Duration(seconds: 5),
-              ),
-            );
+            _showStockVerificationDialog(sessionId, 'Session ended successfully!', Colors.green);
           }
         } else {
           print('Debug: No active session found');
@@ -1195,5 +1497,175 @@ class _SalesPageState extends State<SalesPage> {
         child: const Icon(Icons.add, color: Colors.white),
       ),
     );
+  }
+
+  /// Shows stock verification dialog after session end
+  Future<void> _showStockVerificationDialog(String sessionId, String cashMessage, Color cashColor) async {
+    try {
+      // Get verification summary
+      final summary = await StockSnapshotService.getVerificationSummary(sessionId);
+      
+      if (!mounted) return;
+
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => AlertDialog(
+          title: Row(
+            children: [
+              Icon(Icons.assignment_turned_in, color: AppTheme.primaryColor),
+              const SizedBox(width: 8),
+              const Text('Session Complete'),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Cash reconciliation
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: cashColor.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: cashColor.withOpacity(0.3)),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.account_balance_wallet, color: cashColor, size: 20),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        cashMessage,
+                        style: TextStyle(
+                          color: cashColor,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              
+              const SizedBox(height: 16),
+              
+              // Stock verification summary
+              if (summary['has_snapshots'] == true) ...[
+                Text(
+                  'Stock Verification:',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: AppTheme.primaryColor,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                
+                Row(
+                  children: [
+                    Icon(Icons.inventory, size: 16, color: AppTheme.textSecondary),
+                    const SizedBox(width: 4),
+                    Text('Total Products: ${summary['total_products']}'),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                
+                Row(
+                  children: [
+                    Icon(
+                      Icons.check_circle,
+                      size: 16,
+                      color: summary['accurate_count'] == summary['total_products'] 
+                          ? Colors.green 
+                          : Colors.orange,
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      'Accurate: ${summary['accurate_count']}/${summary['total_products']} (${summary['accuracy_percentage'].toStringAsFixed(1)}%)',
+                      style: TextStyle(
+                        color: summary['accurate_count'] == summary['total_products'] 
+                            ? Colors.green 
+                            : Colors.orange,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ),
+                
+                if (summary['discrepancy_count'] > 0) ...[
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      Icon(Icons.warning, size: 16, color: Colors.red),
+                      const SizedBox(width: 4),
+                      Text(
+                        'Discrepancies: ${summary['discrepancy_count']}',
+                        style: const TextStyle(
+                          color: Colors.red,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ] else ...[
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.orange.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.orange.withOpacity(0.3)),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.warning, color: Colors.orange, size: 20),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          summary['message'] ?? 'Stock verification not available',
+                          style: const TextStyle(color: Colors.orange),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ],
+          ),
+          actions: [
+            if (summary['has_snapshots'] == true)
+              TextButton.icon(
+                onPressed: () {
+                  Navigator.of(context).pop();
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => StockVerificationPage(sessionId: sessionId),
+                    ),
+                  );
+                },
+                icon: const Icon(Icons.list_alt),
+                label: const Text('View Details'),
+              ),
+            ElevatedButton(
+              onPressed: () => Navigator.of(context).pop(),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppTheme.primaryColor,
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('Done'),
+            ),
+          ],
+        ),
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(cashMessage),
+            backgroundColor: cashColor,
+            duration: const Duration(seconds: 5),
+          ),
+        );
+      }
+    }
   }
 }
