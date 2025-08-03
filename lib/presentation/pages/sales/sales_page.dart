@@ -5,9 +5,9 @@ import 'package:uuid/uuid.dart';
 import '../../../core/themes/app_theme.dart';
 import '../../../core/constants/app_constants.dart';
 import '../../../core/services/stock_snapshot_service.dart';
+import '../../../domain/entities/product.dart';
 import '../../../domain/entities/sale.dart';
 import '../../../domain/entities/sales_history.dart';
-import '../../../domain/entities/stock_snapshot.dart';
 import '../../widgets/loading_widget.dart';
 import 'add_sale_page.dart';
 import 'edit_sale_page.dart';
@@ -338,26 +338,69 @@ class _SalesPageState extends State<SalesPage> {
       final cashDifference = closingBalance - expectedClosingBalance;
       final hasCashDiscrepancy = cashDifference.abs() >= 0.01;
 
-      // Create end stock snapshot to check for stock discrepancies
+      // Get actual stock counts from user input
+      final actualStockCounts = await _showStockCountingDialog();
+      if (actualStockCounts == null) {
+        // User cancelled stock counting
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Stock counting is required to end session'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+        return;
+      }
+
+      // Create end stock snapshot with actual counted stock
       try {
-        await StockSnapshotService.createSessionEndSnapshot(
+        await _createEndSnapshotWithActualCounts(
           sessionId: sessionId,
           userId: user.id,
+          actualCounts: actualStockCounts,
         );
       } catch (e) {
         print('Warning: Could not create end stock snapshot: $e');
       }
 
-      // Check for stock discrepancies
+      // Get session start time for enhanced verification
+      String? sessionStartTime;
+      try {
+        // Session data is stored in wallet_balances table, not sales_sessions
+        sessionStartTime = record['created_at']; // We already have this from the record above
+        print('Debug: Session start time from wallet_balances: $sessionStartTime');
+      } catch (e) {
+        print('Warning: Could not get session start time: $e');
+      }
+
+      // Check for stock discrepancies using enhanced movement calculation
       Map<String, dynamic> stockSummary = {};
       bool hasStockDiscrepancy = false;
       
       try {
-        stockSummary = await StockSnapshotService.getVerificationSummary(sessionId);
+        // Use our enhanced verification that considers all movements
+        if (sessionStartTime != null) {
+          print('Debug: Using ENHANCED verification with sessionStartTime: $sessionStartTime');
+          stockSummary = await _getEnhancedVerificationSummary(sessionId, sessionStartTime, actualStockCounts);
+          print('Debug: Enhanced verification result: $stockSummary');
+        } else {
+          print('Debug: Using OLD verification (no sessionStartTime)');
+          // Fallback to old method if we can't get session start time
+          stockSummary = await StockSnapshotService.getVerificationSummary(sessionId);
+          print('Debug: Old verification result: $stockSummary');
+        }
         hasStockDiscrepancy = stockSummary['has_snapshots'] == true && 
                              stockSummary['discrepancy_count'] > 0;
+        print('Debug: hasStockDiscrepancy: $hasStockDiscrepancy, discrepancy_count: ${stockSummary['discrepancy_count']}');
       } catch (e) {
-        print('Warning: Could not get stock verification summary: $e');
+        print('Warning: Could not get enhanced verification summary: $e');
+        // Fallback to old method
+        try {
+          stockSummary = await StockSnapshotService.getVerificationSummary(sessionId);
+          hasStockDiscrepancy = stockSummary['has_snapshots'] == true && 
+                               stockSummary['discrepancy_count'] > 0;
+        } catch (e2) {
+          print('Warning: Could not get stock verification summary: $e2');
+        }
       }
 
       // If there are discrepancies, require a reason
@@ -379,7 +422,7 @@ class _SalesPageState extends State<SalesPage> {
         await _saveEndBalanceWithReason(closingBalance, reason);
       } else {
         // No discrepancies - proceed normally
-        await _saveEndBalance(closingBalance);
+        await _saveEndBalance(closingBalance, stockSummary);
       }
     } catch (e) {
       print('Error processing session end: $e');
@@ -391,6 +434,424 @@ class _SalesPageState extends State<SalesPage> {
           ),
         );
       }
+    }
+  }
+
+  /// Show stock counting dialog to get actual product counts
+  Future<Map<String, double>?> _showStockCountingDialog() async {
+    try {
+      // Get current session info
+      final user = Supabase.instance.client.auth.currentUser;
+      if (user == null) throw Exception('No authenticated user');
+      
+      final today = DateTime.now().toIso8601String().substring(0, 10);
+      final sessionResponse = await Supabase.instance.client
+          .from(AppConstants.walletBalanceTable)
+          .select()
+          .eq('user_id', user.id)
+          .eq('date', today)
+          .eq('status', 'opened')
+          .order('created_at', ascending: false)
+          .limit(1);
+
+      if (sessionResponse.isEmpty) {
+        throw Exception('No active session found');
+      }
+
+      final sessionRecord = sessionResponse.first;
+      final sessionId = sessionRecord['id'];
+      final sessionStartTime = sessionRecord['created_at'];
+
+      // Get all active products with calculated expected quantities
+      final productsWithExpected = await _getProductsWithExpectedQuantities(sessionId, sessionStartTime);
+
+      if (productsWithExpected.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('No products found for stock counting'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+        return {};
+      }
+
+      // Create controllers for each product with expected quantities
+      final Map<String, TextEditingController> controllers = {};
+      
+      for (final productData in productsWithExpected) {
+        final product = productData['product'] as Product;
+        final expectedQuantity = productData['expected_quantity'] as double;
+        
+        controllers[product.id] = TextEditingController(
+          text: expectedQuantity.toString(),
+        );
+      }
+
+      return await showDialog<Map<String, double>>(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => _StockCountingDialog(
+          productsWithExpected: productsWithExpected,
+          controllers: controllers,
+        ),
+      ).then((result) {
+        // Dispose controllers
+        for (final controller in controllers.values) {
+          controller.dispose();
+        }
+        return result;
+      });
+
+    } catch (e) {
+      print('Error showing stock counting dialog: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error loading products for counting: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+      return null;
+    }
+  }
+
+  /// Get products with expected quantities after considering all movements since session start
+  Future<List<Map<String, dynamic>>> _getProductsWithExpectedQuantities(String sessionId, String sessionStartTime) async {
+    try {
+      // Get all active products
+      final productsResponse = await Supabase.instance.client
+          .from(AppConstants.productsTable)
+          .select()
+          .eq('is_active', true)
+          .order('name');
+
+      final products = (productsResponse as List)
+          .map((json) => Product.fromJson(json))
+          .toList();
+
+      // Get session start snapshot to know the starting quantities
+      final startSnapshotResponse = await Supabase.instance.client
+          .from(AppConstants.stockSnapshotsTable)
+          .select('id')
+          .eq('session_id', sessionId)
+          .eq('snapshot_type', 'session_start')
+          .limit(1);
+
+      Map<String, double> startingQuantities = {};
+      
+      if (startSnapshotResponse.isNotEmpty) {
+        final startSnapshotId = startSnapshotResponse.first['id'];
+        
+        // Get starting quantities from snapshot
+        final snapshotItemsResponse = await Supabase.instance.client
+            .from(AppConstants.stockSnapshotItemsTable)
+            .select('product_id, quantity_recorded')
+            .eq('snapshot_id', startSnapshotId);
+            
+        for (final item in snapshotItemsResponse) {
+          startingQuantities[item['product_id']] = (item['quantity_recorded'] as num).toDouble();
+        }
+      } else {
+        // Fallback to current product stock quantities if no start snapshot
+        for (final product in products) {
+          startingQuantities[product.id] = product.stockQuantity.toDouble();
+        }
+      }
+
+      // Calculate movements since session start for each product
+      final List<Map<String, dynamic>> productsWithExpected = [];
+      
+      for (final product in products) {
+        final startingQuantity = startingQuantities[product.id] ?? product.stockQuantity.toDouble();
+        final movements = await _calculateProductMovementsSinceSession(product.id, sessionStartTime);
+        final expectedQuantity = startingQuantity + movements;
+        
+        print('Debug: Product ${product.name} - Starting: $startingQuantity, Movements: $movements, Expected: $expectedQuantity');
+        
+        productsWithExpected.add({
+          'product': product,
+          'starting_quantity': startingQuantity,
+          'movements': movements,
+          'expected_quantity': expectedQuantity,
+        });
+      }
+
+      return productsWithExpected;
+      
+    } catch (e) {
+      print('Error getting products with expected quantities: $e');
+      throw Exception('Failed to calculate expected quantities: $e');
+    }
+  }
+
+  /// Calculate net inventory movements for a product since session start
+  Future<double> _calculateProductMovementsSinceSession(String productId, String sessionStartTime) async {
+    try {
+      double netMovement = 0.0;
+      print('Debug: Calculating movements for product $productId since $sessionStartTime');
+
+      // 1. Sales (negative movement - items sold) - only completed and pending sales
+      final salesResponse = await Supabase.instance.client
+          .from(AppConstants.saleItemsTable)
+          .select('quantity, sales!inner(sale_date, status)')
+          .eq('product_id', productId)
+          .gte('sales.sale_date', sessionStartTime);
+
+      print('Debug: Sales response: $salesResponse');
+      for (final saleItem in salesResponse) {
+        final sales = saleItem['sales'];
+        final status = sales['status'] as String;
+        if (status == 'completed' || status == 'pending') {
+          final quantity = (saleItem['quantity'] as num).toDouble();
+          netMovement -= quantity; // Subtract sold items
+          print('Debug: Sale - Product $productId, quantity: $quantity, status: $status, netMovement now: $netMovement');
+        }
+      }
+
+      // 2. Refunds (positive movement - items returned to inventory)
+      final refundsResponse = await Supabase.instance.client
+          .from(AppConstants.saleItemsTable)
+          .select('quantity, sales!inner(sale_date, status)')
+          .eq('product_id', productId)
+          .gte('sales.sale_date', sessionStartTime)
+          .eq('sales.status', 'refunded');
+
+      print('Debug: Refunds response: $refundsResponse');
+      for (final refundItem in refundsResponse) {
+        final quantity = (refundItem['quantity'] as num).toDouble();
+        netMovement += quantity; // Add refunded items back
+        print('Debug: Refund - Product $productId, quantity: $quantity, netMovement now: $netMovement');
+      }
+
+      // 3. Inventory movements (restocks, adjustments)
+      if (await _tableExists(AppConstants.inventoryMovementsTable)) {
+        final movementsResponse = await Supabase.instance.client
+            .from(AppConstants.inventoryMovementsTable)
+            .select('movement_type, quantity')
+            .eq('product_id', productId)
+            .gte('created_at', sessionStartTime);
+
+        print('Debug: Inventory movements response: $movementsResponse');
+        for (final movement in movementsResponse) {
+          final movementType = movement['movement_type'] as String;
+          final quantity = (movement['quantity'] as num).toDouble();
+          
+          print('Debug: Inventory movement - Product $productId, type: $movementType, quantity: $quantity');
+          
+          // Add positive movements (restocks, adjustments up)
+          // Subtract negative movements (waste, damage, adjustments down)
+          if (['in', 'refill', 'return'].contains(movementType)) {
+            netMovement += quantity.abs();
+            print('Debug: Added positive movement: +$quantity, netMovement now: $netMovement');
+          } else if (['out', 'sale', 'adjustment'].contains(movementType)) {
+            // For adjustments, we need to check if it's positive or negative
+            if (movementType == 'adjustment') {
+              // Assume adjustment can be positive or negative based on quantity sign
+              netMovement += quantity; // Keep the sign as is for adjustments
+              print('Debug: Added adjustment: ${quantity >= 0 ? '+' : ''}$quantity, netMovement now: $netMovement');
+            } else {
+              netMovement -= quantity.abs();
+              print('Debug: Subtracted negative movement: -$quantity, netMovement now: $netMovement');
+            }
+          }
+        }
+      }
+
+      print('Debug: Final netMovement for product $productId: $netMovement');
+      return netMovement;
+      
+    } catch (e) {
+      print('Error calculating product movements for $productId: $e');
+      return 0.0; // Return 0 if calculation fails
+    }
+  }
+
+  /// Helper method to check if a table exists
+  Future<bool> _tableExists(String tableName) async {
+    try {
+      await Supabase.instance.client
+          .from(tableName)
+          .select('*')
+          .limit(1);
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /// Enhanced verification summary that considers all inventory movements
+  Future<Map<String, dynamic>> _getEnhancedVerificationSummary(
+    String sessionId, 
+    String sessionStartTime, 
+    Map<String, double> actualCounts
+  ) async {
+    try {
+      // Get all active products with expected quantities
+      final productsWithExpected = await _getProductsWithExpectedQuantities(sessionId, sessionStartTime);
+      
+      if (productsWithExpected.isEmpty) {
+        return {
+          'has_snapshots': false,
+          'message': 'No products found for verification',
+        };
+      }
+
+      int accurateCount = 0;
+      int discrepancyCount = 0;
+      double totalVarianceValue = 0.0;
+      double startTotalValue = 0.0;
+      double endTotalValue = 0.0;
+      List<Map<String, dynamic>> discrepancyDetails = [];
+
+      // Compare expected vs actual for each product
+      for (final productData in productsWithExpected) {
+        final product = productData['product'] as Product;
+        final expectedQuantity = productData['expected_quantity'] as double;
+        final startingQuantity = productData['starting_quantity'] as double;
+        final actualQuantity = actualCounts[product.id] ?? expectedQuantity;
+        final movements = productData['movements'] as double;
+        
+        final variance = actualQuantity - expectedQuantity;
+        final isAccurate = variance.abs() <= 0.01; // Allow small rounding differences
+        
+        print('Debug: ${product.name} verification - Expected: $expectedQuantity, Actual: $actualQuantity, Variance: $variance, IsAccurate: $isAccurate');
+        print('Debug: ActualCounts for ${product.name} (${product.id}): ${actualCounts[product.id]}');
+        print('Debug: Detailed breakdown - Starting: $startingQuantity, Movements: $movements, Expected: $expectedQuantity, User Input: $actualQuantity');
+        
+        if (isAccurate) {
+          accurateCount++;
+          print('Debug: ${product.name} marked as ACCURATE');
+        } else {
+          discrepancyCount++;
+          print('Debug: DISCREPANCY FOUND for ${product.name} - Starting: $startingQuantity, Movements: $movements, Expected: $expectedQuantity, Actual: $actualQuantity, Variance: $variance');
+          // Add detailed discrepancy information
+          discrepancyDetails.add({
+            'product_id': product.id,
+            'product_name': product.name,
+            'starting_quantity': startingQuantity,
+            'expected_quantity': expectedQuantity,
+            'actual_quantity': actualQuantity,
+            'variance': variance,
+            'movements_since_session': movements,
+            'variance_value': variance.abs() * product.price,
+            'unit_price': product.price,
+          });
+        }
+        
+        totalVarianceValue += variance.abs() * product.price;
+        startTotalValue += startingQuantity * product.price;
+        endTotalValue += actualQuantity * product.price;
+      }
+
+      final totalProducts = productsWithExpected.length;
+      final accuracyPercentage = totalProducts > 0 ? (accurateCount / totalProducts * 100) : 0.0;
+
+      final result = {
+        'has_snapshots': true,
+        'total_products': totalProducts,
+        'accurate_count': accurateCount,
+        'discrepancy_count': discrepancyCount,
+        'accuracy_percentage': accuracyPercentage,
+        'total_variance_value': totalVarianceValue,
+        'start_total_value': startTotalValue,
+        'end_total_value': endTotalValue,
+        'value_difference': endTotalValue - startTotalValue,
+        'discrepancy_details': discrepancyDetails, // Include detailed discrepancy information
+      };
+
+      print('Debug: ENHANCED VERIFICATION RESULT: $result');
+      print('Debug: Enhanced verification found $discrepancyCount discrepancies out of $totalProducts products');
+      
+      return result;
+      
+    } catch (e) {
+      print('Error getting enhanced verification summary: $e');
+      throw Exception('Failed to calculate enhanced verification summary: $e');
+    }
+  }
+
+  /// Create end snapshot with actual counted stock
+  Future<void> _createEndSnapshotWithActualCounts({
+    required String sessionId,
+    required String userId,
+    required Map<String, double> actualCounts,
+  }) async {
+    if (!AppConstants.enableSupabase) {
+      throw Exception('Supabase is disabled');
+    }
+
+    const uuid = Uuid();
+    final snapshotId = uuid.v4();
+    final now = DateTime.now();
+
+    try {
+      // Get all active products
+      final productsResponse = await Supabase.instance.client
+          .from(AppConstants.productsTable)
+          .select()
+          .eq('is_active', true)
+          .order('name');
+
+      final products = (productsResponse as List)
+          .map((json) => Product.fromJson(json))
+          .toList();
+
+      // Calculate totals using actual counts
+      int totalProductsCount = products.length;
+      double totalStockValue = 0.0;
+      final snapshotItems = <Map<String, dynamic>>[];
+
+      for (final product in products) {
+        final actualQuantity = actualCounts[product.id] ?? product.stockQuantity.toDouble();
+        final itemValue = actualQuantity * product.price;
+        totalStockValue += itemValue;
+
+        final snapshotItem = {
+          'id': uuid.v4(),
+          'snapshot_id': snapshotId,
+          'product_id': product.id,
+          'product_name': product.name,
+          'category': product.category,
+          'unit': product.unit,
+          'quantity_recorded': actualQuantity,
+          'unit_price': product.price,
+          'total_value': itemValue,
+          'created_at': now.toIso8601String(),
+        };
+
+        snapshotItems.add(snapshotItem);
+      }
+
+      // Create the main snapshot record
+      final snapshot = {
+        'id': snapshotId,
+        'session_id': sessionId,
+        'user_id': userId,
+        'snapshot_type': 'session_end',
+        'snapshot_date': now.toIso8601String(),
+        'total_products_count': totalProductsCount,
+        'total_stock_value': totalStockValue,
+        'created_at': now.toIso8601String(),
+      };
+
+      // Insert snapshot into database
+      await Supabase.instance.client
+          .from(AppConstants.stockSnapshotsTable)
+          .insert(snapshot);
+
+      // Insert all snapshot items in batch
+      await Supabase.instance.client
+          .from(AppConstants.stockSnapshotItemsTable)
+          .insert(snapshotItems);
+
+      print('End stock snapshot created with actual counts: ${snapshotItems.length} products, total value: ₹${totalStockValue.toStringAsFixed(2)}');
+
+    } catch (e) {
+      print('Error creating end stock snapshot with actual counts: $e');
+      throw Exception('Failed to create end stock snapshot: $e');
     }
   }
 
@@ -511,6 +972,86 @@ class _SalesPageState extends State<SalesPage> {
                           color: Colors.red.shade700,
                         ),
                       ),
+                      // Show detailed discrepancy information
+                      if (stockSummary['discrepancy_details'] != null && 
+                          (stockSummary['discrepancy_details'] as List).isNotEmpty) ...[
+                        const SizedBox(height: 8),
+                        Text(
+                          'Products with discrepancies:',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            color: Colors.red.shade700,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Container(
+                          constraints: const BoxConstraints(maxHeight: 200),
+                          child: SingleChildScrollView(
+                            child: Column(
+                              children: (stockSummary['discrepancy_details'] as List)
+                                  .map<Widget>((detail) => Container(
+                                        margin: const EdgeInsets.only(bottom: 4),
+                                        padding: const EdgeInsets.all(8),
+                                        decoration: BoxDecoration(
+                                          color: Colors.red.withOpacity(0.05),
+                                          borderRadius: BorderRadius.circular(4),
+                                          border: Border.all(
+                                            color: Colors.red.withOpacity(0.2),
+                                            width: 0.5,
+                                          ),
+                                        ),
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              detail['product_name'] ?? 'Unknown Product',
+                                              style: TextStyle(
+                                                fontWeight: FontWeight.w600,
+                                                color: Colors.red.shade800,
+                                                fontSize: 12,
+                                              ),
+                                            ),
+                                            const SizedBox(height: 2),
+                                            Row(
+                                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                              children: [
+                                                Text(
+                                                  'Expected: ${(detail['expected_quantity'] ?? 0.0).toStringAsFixed(1)}',
+                                                  style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+                                                ),
+                                                Text(
+                                                  'Actual: ${(detail['actual_quantity'] ?? 0.0).toStringAsFixed(1)}',
+                                                  style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+                                                ),
+                                                Text(
+                                                  'Diff: ${(detail['variance'] ?? 0.0) >= 0 ? '+' : ''}${(detail['variance'] ?? 0.0).toStringAsFixed(1)}',
+                                                  style: TextStyle(
+                                                    fontSize: 11,
+                                                    fontWeight: FontWeight.w600,
+                                                    color: Colors.red.shade700,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                            if ((detail['movements_since_session'] ?? 0.0).abs() > 0.01) ...[
+                                              const SizedBox(height: 2),
+                                              Text(
+                                                'Movements: ${(detail['movements_since_session'] ?? 0.0) >= 0 ? '+' : ''}${(detail['movements_since_session'] ?? 0.0).toStringAsFixed(1)}',
+                                                style: TextStyle(
+                                                  fontSize: 10,
+                                                  color: Colors.blue.shade600,
+                                                  fontStyle: FontStyle.italic,
+                                                ),
+                                              ),
+                                            ],
+                                          ],
+                                        ),
+                                      ))
+                                  .toList(),
+                            ),
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -843,7 +1384,7 @@ class _SalesPageState extends State<SalesPage> {
     }
   }
 
-  Future<void> _saveEndBalance(double balance) async {
+  Future<void> _saveEndBalance(double balance, [Map<String, dynamic>? stockSummary]) async {
     try {
       final user = Supabase.instance.client.auth.currentUser;
       print('Debug: Ending session for user: ${user?.id}');
@@ -885,7 +1426,7 @@ class _SalesPageState extends State<SalesPage> {
               _hasActiveSession = false;
             });
             
-            _showStockVerificationDialog(sessionId, 'Session ended successfully!', Colors.green);
+            _showStockVerificationDialog(sessionId, 'Session ended successfully!', Colors.green, stockSummary);
           }
         } else {
           print('Debug: No active session found');
@@ -1500,10 +2041,22 @@ class _SalesPageState extends State<SalesPage> {
   }
 
   /// Shows stock verification dialog after session end
-  Future<void> _showStockVerificationDialog(String sessionId, String cashMessage, Color cashColor) async {
+  Future<void> _showStockVerificationDialog(
+    String sessionId, 
+    String cashMessage, 
+    Color cashColor, 
+    [Map<String, dynamic>? enhancedStockSummary]
+  ) async {
     try {
-      // Get verification summary
-      final summary = await StockSnapshotService.getVerificationSummary(sessionId);
+      // Use enhanced verification results if provided, otherwise fallback to old method
+      Map<String, dynamic> summary;
+      if (enhancedStockSummary != null) {
+        summary = enhancedStockSummary;
+        print('Debug: Using ENHANCED summary in dialog: $summary');
+      } else {
+        summary = await StockSnapshotService.getVerificationSummary(sessionId);
+        print('Debug: Using OLD summary in dialog: $summary');
+      }
       
       if (!mounted) return;
 
@@ -1667,5 +2220,276 @@ class _SalesPageState extends State<SalesPage> {
         );
       }
     }
+  }
+}
+
+/// Stock counting dialog widget
+class _StockCountingDialog extends StatefulWidget {
+  final List<Map<String, dynamic>> productsWithExpected;
+  final Map<String, TextEditingController> controllers;
+
+  const _StockCountingDialog({
+    required this.productsWithExpected,
+    required this.controllers,
+  });
+
+  @override
+  State<_StockCountingDialog> createState() => _StockCountingDialogState();
+}
+
+class _StockCountingDialogState extends State<_StockCountingDialog> {
+  final ScrollController _scrollController = ScrollController();
+  String _searchQuery = '';
+  
+  @override
+  void initState() {
+    super.initState();
+    // Add listeners to all controllers for real-time updates
+    for (final controller in widget.controllers.values) {
+      controller.addListener(() {
+        setState(() {}); // Rebuild to show difference indicators
+      });
+    }
+  }
+  
+  List<Map<String, dynamic>> get _filteredProducts {
+    if (_searchQuery.isEmpty) return widget.productsWithExpected;
+    
+    return widget.productsWithExpected.where((productData) {
+      final product = productData['product'] as Product;
+      return product.name.toLowerCase().contains(_searchQuery.toLowerCase()) ||
+             product.category.toLowerCase().contains(_searchQuery.toLowerCase());
+    }).toList();
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Row(
+        children: [
+          Icon(Icons.inventory_2, color: AppTheme.primaryColor),
+          const SizedBox(width: 8),
+          const Text('Stock Count'),
+        ],
+      ),
+      content: SizedBox(
+        width: double.maxFinite,
+        height: MediaQuery.of(context).size.height * 0.6,
+        child: Column(
+          children: [
+            Text(
+              'Please count and enter the actual quantity for each product:',
+              style: TextStyle(
+                color: AppTheme.textSecondary,
+                fontSize: 14,
+              ),
+            ),
+            const SizedBox(height: 16),
+            
+            // Search bar
+            TextField(
+              decoration: InputDecoration(
+                hintText: 'Search products...',
+                prefixIcon: const Icon(Icons.search),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              ),
+              onChanged: (value) {
+                setState(() {
+                  _searchQuery = value;
+                });
+              },
+            ),
+            const SizedBox(height: 16),
+            
+            // Products list
+            Expanded(
+              child: Scrollbar(
+                controller: _scrollController,
+                child: ListView.builder(
+                  controller: _scrollController,
+                  itemCount: _filteredProducts.length,
+                  itemBuilder: (context, index) {
+                    final productData = _filteredProducts[index];
+                    final product = productData['product'] as Product;
+                    final expectedQuantity = productData['expected_quantity'] as double;
+                    final startingQuantity = productData['starting_quantity'] as double;
+                    final movements = productData['movements'] as double;
+                    final controller = widget.controllers[product.id]!;
+                    
+                    return Card(
+                      margin: const EdgeInsets.only(bottom: 8),
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        product.name,
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 16,
+                                        ),
+                                      ),
+                                      Text(
+                                        product.category,
+                                        style: TextStyle(
+                                          color: AppTheme.textSecondary,
+                                          fontSize: 12,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                Container(
+                                  width: 100,
+                                  child: TextField(
+                                    controller: controller,
+                                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                                    decoration: InputDecoration(
+                                      labelText: 'Count',
+                                      suffixText: product.unit,
+                                      border: const OutlineInputBorder(),
+                                      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                    ),
+                                    textAlign: TextAlign.center,
+                                    style: const TextStyle(fontWeight: FontWeight.bold),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            // Movement summary and expected quantity
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Text(
+                                      'Start: ${startingQuantity.toStringAsFixed(1)} ${product.unit}',
+                                      style: TextStyle(
+                                        color: AppTheme.textSecondary,
+                                        fontSize: 11,
+                                      ),
+                                    ),
+                                    Text(
+                                      'Movements: ${movements >= 0 ? '+' : ''}${movements.toStringAsFixed(1)} ${product.unit}',
+                                      style: TextStyle(
+                                        color: movements >= 0 ? Colors.green : Colors.red,
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 4),
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Text(
+                                      'Expected: ${expectedQuantity.toStringAsFixed(1)} ${product.unit}',
+                                      style: TextStyle(
+                                        color: AppTheme.primaryColor,
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                    Text(
+                                      'Price: ₹${product.price.toStringAsFixed(2)}',
+                                      style: TextStyle(
+                                        color: AppTheme.textSecondary,
+                                        fontSize: 11,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                            // Show difference indicator
+                            Builder(
+                              builder: (context) {
+                                final currentValue = double.tryParse(controller.text) ?? expectedQuantity;
+                                final difference = currentValue - expectedQuantity;
+                                
+                                if (difference.abs() < 0.01) {
+                                  return const SizedBox.shrink();
+                                }
+                                
+                                return Container(
+                                  margin: const EdgeInsets.only(top: 8),
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                  decoration: BoxDecoration(
+                                    color: difference > 0 ? Colors.blue.withOpacity(0.1) : Colors.orange.withOpacity(0.1),
+                                    borderRadius: BorderRadius.circular(4),
+                                    border: Border.all(
+                                      color: difference > 0 ? Colors.blue.withOpacity(0.3) : Colors.orange.withOpacity(0.3),
+                                    ),
+                                  ),
+                                  child: Text(
+                                    difference > 0 
+                                        ? '+${difference.toStringAsFixed(1)} ${product.unit} (Extra)'
+                                        : '${difference.toStringAsFixed(1)} ${product.unit} (Short)',
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w500,
+                                      color: difference > 0 ? Colors.blue.shade700 : Colors.orange.shade700,
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(null),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          onPressed: () {
+            final Map<String, double> counts = {};
+            for (final productData in widget.productsWithExpected) {
+              final product = productData['product'] as Product;
+              final expectedQuantity = productData['expected_quantity'] as double;
+              final controller = widget.controllers[product.id];
+              if (controller != null) {
+                final value = double.tryParse(controller.text) ?? expectedQuantity;
+                counts[product.id] = value;
+              }
+            }
+            Navigator.of(context).pop(counts);
+          },
+          style: ElevatedButton.styleFrom(
+            backgroundColor: AppTheme.primaryColor,
+            foregroundColor: Colors.white,
+          ),
+          child: const Text('Confirm Counts'),
+        ),
+      ],
+    );
   }
 }

@@ -29,6 +29,7 @@ class AppConstants {
   static const String usersTable = 'users';
   static const String productsTable = 'products';
   static const String salesTable = 'sales';
+  static const String saleItemsTable = 'sale_items';
   static const String inventoryTable = 'inventory';
   static const String categoriesTable = 'categories';
   static const String reportsTable = 'reports';
